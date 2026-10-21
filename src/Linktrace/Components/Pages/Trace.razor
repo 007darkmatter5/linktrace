@@ -1,0 +1,126 @@
+@page "/trace/{PortId:int}"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject TraceService Tracer
+
+<PageTitle>Trace · Linktrace</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" />
+    return;
+}
+@if (_trace is null)
+{
+    <MudAlert Severity="Severity.Warning">Port not found.</MudAlert>
+    return;
+}
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+    <MudIcon Icon="@Icons.Material.Filled.Route" Size="Size.Large" Color="Color.Primary" />
+    <MudText Typo="Typo.h4">Trace</MudText>
+    <MudSpacer />
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ArrowBack" Href="@($"devices/{_trace.Start.DeviceId}")">
+        Back to @_trace.Start.Device.Name
+    </MudButton>
+</MudStack>
+
+<MudPaper Outlined="true" Class="pa-4 mb-4">
+    @if (_trace.Hops.Count == 1)
+    {
+        <MudText Typo="Typo.h6">@Display.Port(_trace.Start) isn't connected to anything.</MudText>
+    }
+    else
+    {
+        <MudText Typo="Typo.h6">
+            @Display.Port(_trace.First.Port) <MudIcon Icon="@Icons.Material.Filled.SyncAlt" Style="vertical-align: middle" /> @Display.Port(_trace.Last.Port)
+        </MudText>
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">
+            @_trace.CableCount cable(s) · @_trace.Hops.Count ports along the path
+            @if (_trace.TotalLengthMeters is { } len) { <span> · @len.ToString("0.##") m total</span> }
+        </MudText>
+    }
+    @if (_trace.LoopDetected)
+    {
+        <MudAlert Severity="Severity.Warning" Class="mt-2">This path loops back on itself. Check the pass-through pairs and cables shown below.</MudAlert>
+    }
+</MudPaper>
+
+@for (var i = 0; i < _trace.Hops.Count; i++)
+{
+    var hop = _trace.Hops[i];
+    var isStart = hop.Port.Id == _trace.Start.Id;
+    var isEnd = i == 0 || i == _trace.Hops.Count - 1;
+    var nextHop = i + 1 < _trace.Hops.Count ? _trace.Hops[i + 1] : null; // copy: "i" must not be captured by child content
+
+    <MudPaper Outlined="true" Class="@($"pa-3 {(isStart ? "lt-trace-start" : "")}")" Style="max-width: 760px">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+            <MudAvatar Color="@(isEnd && _trace.Hops.Count > 1 ? Color.Primary : Color.Default)" Variant="Variant.Outlined">
+                <MudIcon Icon="@Display.KindIcon(hop.Device.Kind)" />
+            </MudAvatar>
+            <div style="flex: 1; min-width: 0">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+                    <MudLink Href="@($"devices/{hop.Device.Id}")" Typo="Typo.subtitle1"><b>@hop.Device.Name</b></MudLink>
+                    <MudText Typo="Typo.subtitle1">›</MudText>
+                    <MudText Typo="Typo.subtitle1" Class="lt-mono">@hop.Port.Name</MudText>
+                    @if (hop.Port.Face != PortFace.Standard)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text">@Display.Face(hop.Port.Face)</MudChip>
+                    }
+                    @if (isStart && _trace.Hops.Count > 1)
+                    {
+                        <MudChip T="string" Size="Size.Small" Color="Color.Secondary">you started here</MudChip>
+                    }
+                </MudStack>
+                <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                    @Display.Kind(hop.Device.Kind) · @Display.Location(hop.Device) · @Display.Media(hop.Port.MediaType)
+                </MudText>
+                @if (hop.Port.Description is not null)
+                {
+                    <MudText Typo="Typo.body2">@hop.Port.Description</MudText>
+                }
+            </div>
+            @if (!isStart)
+            {
+                <MudIconButton Icon="@Icons.Material.Filled.Route" Href="@($"trace/{hop.Port.Id}")" title="Trace from here" Size="Size.Small" />
+            }
+        </MudStack>
+    </MudPaper>
+
+    @if (hop.LinkToNext is { } link)
+    {
+        @if (link.Kind == LinkKind.Cable && link.Cable is { } c)
+        {
+            <div class="lt-trace-connector cable">
+                <MudIcon Icon="@Icons.Material.Filled.Cable" Color="Color.Primary" />
+                <div>
+                    <MudText Typo="Typo.body2"><b>@(c.Label ?? "Unlabelled cable")</b></MudText>
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                        @string.Join(" · ", new[] { Display.CableKind(c.CableType), c.Color, c.LengthMeters is { } m ? $"{m:0.##} m" : null, c.Notes }.Where(x => !string.IsNullOrEmpty(x)))
+                    </MudText>
+                </div>
+            </div>
+        }
+        else
+        {
+            <div class="lt-trace-connector passthrough">
+                <MudIcon Icon="@Icons.Material.Filled.SwapVert" Color="Color.Default" />
+                <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">passes through @hop.Device.Name (@Display.Face(hop.Port.Face) → @Display.Face(nextHop?.Port.Face ?? PortFace.Standard))</MudText>
+            </div>
+        }
+    }
+}
+
+@code {
+    [Parameter] public int PortId { get; set; }
+
+    private TraceResult? _trace;
+    private bool _loading = true;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _loading = true;
+        _trace = await Tracer.TraceAsync(PortId);
+        _loading = false;
+    }
+}

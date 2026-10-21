@@ -1,0 +1,134 @@
+@inherits DialogBase
+@inject LocationService Locations
+@inject DeviceService Devices
+@inject FaceplateService Faceplates
+
+<MudDialog>
+    <DialogContent>
+        @if (_rooms is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_rooms.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info">Create a site and a room first (Sites &amp; racks), then add devices to it.</MudAlert>
+        }
+        else
+        {
+            <MudForm @ref="Form">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="7">
+                        <MudTextField @bind-Value="Model.Name" Label="Name" Required="true" MaxLength="100" AutoFocus="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="5">
+                        <MudSelect T="DeviceKind" @bind-Value="Model.Kind" Label="Type">
+                            @foreach (var k in Enum.GetValues<DeviceKind>())
+                            {
+                                <MudSelectItem Value="k">@Display.Kind(k)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Model.Manufacturer" Label="Manufacturer" MaxLength="100" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Model.Model" Label="Model" MaxLength="100" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Model.SerialNumber" Label="Serial number" MaxLength="100" />
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudTextField @bind-Value="Model.ManagementAddress" Label="Management IP / hostname" MaxLength="100" />
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudSelect T="int" Value="Model.RoomId" ValueChanged="RoomChanged" Label="Site / room" Required="true"
+                                   RequiredError="Pick a room">
+                            @foreach (var r in _rooms)
+                            {
+                                <MudSelectItem Value="r.Id">@r.Site.Name / @r.Name</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="int?" @bind-Value="Model.RackId" Label="Rack" Disabled="RacksInRoom.Count == 0"
+                                   HelperText="@(RacksInRoom.Count == 0 ? "No racks in this room" : null)">
+                            <MudSelectItem T="int?" Value="null">— Not in a rack —</MudSelectItem>
+                            @foreach (var k in RacksInRoom)
+                            {
+                                <MudSelectItem T="int?" Value="k.Id">@k.Name (@k.HeightU U)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudNumericField T="int?" @bind-Value="Model.RackUnit" Label="Bottom U" Min="1" Max="60" Disabled="Model.RackId is null" />
+                    </MudItem>
+                    <MudItem xs="6" sm="3">
+                        <MudNumericField @bind-Value="Model.HeightU" Label="Height (U)" Min="1" Max="60" Disabled="Model.RackId is null" />
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudSelect T="int?" @bind-Value="Model.FaceplateTemplateId" Label="Faceplate layout"
+                                   HelperText="Build custom layouts with “Edit layout” on the device page">
+                            <MudSelectItem T="int?" Value="null">Automatic</MudSelectItem>
+                            @foreach (var t in _templates)
+                            {
+                                <MudSelectItem T="int?" Value="t.Id">@t.Name@(t.Model is null ? "" : $" · {t.Model}")</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    @if (Model.FaceplateTemplateId is null)
+                    {
+                    <MudItem xs="6" sm="3">
+                        <MudSelect T="int" @bind-Value="Model.FaceplateRows" Label="Faceplate rows">
+                            <MudSelectItem Value="0">Automatic</MudSelectItem>
+                            @for (var r = 1; r <= 4; r++)
+                            {
+                                var rows = r;
+                                <MudSelectItem Value="rows">@rows</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="6" sm="9">
+                        <MudSelect T="PortNumbering" @bind-Value="Model.FaceplateNumbering" Label="Port numbering"
+                                   HelperText="How port numbers run across the faceplate">
+                            <MudSelectItem Value="PortNumbering.Auto">Automatic (switches odd/even, panels row by row)</MudSelectItem>
+                            <MudSelectItem Value="PortNumbering.OddTopEvenBottom">Odd on top, even below (1 over 2, 3 over 4…)</MudSelectItem>
+                            <MudSelectItem Value="PortNumbering.RowByRow">Row by row (1 2 3 … then next row)</MudSelectItem>
+                        </MudSelect>
+                    </MudItem>
+                    }
+                    <MudItem xs="12">
+                        <MudTextField @bind-Value="Model.Notes" Label="Notes" Lines="3" MaxLength="2000" />
+                    </MudItem>
+                </MudGrid>
+            </MudForm>
+        }
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public Device Model { get; set; } = new();
+
+    private List<Room>? _rooms;
+    private List<FaceplateTemplateInfo> _templates = [];
+
+    private List<Rack> RacksInRoom => _rooms?.FirstOrDefault(r => r.Id == Model.RoomId)?.Racks.OrderBy(r => r.Name).ToList() ?? [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        _rooms = await Locations.GetRoomsAsync();
+        _templates = await Faceplates.GetTemplatesAsync();
+        if (Model.RoomId == 0 && _rooms.Count == 1) Model.RoomId = _rooms[0].Id;
+    }
+
+    private void RoomChanged(int roomId)
+    {
+        if (roomId != Model.RoomId) Model.RackId = null;
+        Model.RoomId = roomId;
+    }
+
+    private Task Save() => SubmitAsync(() => Devices.SaveAsync(Model));
+}

@@ -1,0 +1,19 @@
+<MudPaper Class="pa-4 lt-clickable" Outlined="true" Style="height: 100%" @onclick="@(() => Nav.NavigateTo(Href))">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="3">
+        <MudAvatar Color="Color.Primary" Variant="Variant.Outlined"><MudIcon Icon="@Icon" /></MudAvatar>
+        <div style="flex: 1">
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">@Label</MudText>
+            <MudText Typo="Typo.h5">@Value</MudText>
+        </div>
+    </MudStack>
+    @ChildContent
+</MudPaper>
+
+@code {
+    [Inject] private NavigationManager Nav { get; set; } = default!;
+    [Parameter] public string Icon { get; set; } = "";
+    [Parameter] public string Label { get; set; } = "";
+    [Parameter] public string Value { get; set; } = "";
+    [Parameter] public string Href { get; set; } = "";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+}

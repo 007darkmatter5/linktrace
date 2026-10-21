@@ -1,0 +1,158 @@
+name: Release
+
+# beta branch -> Beta channel:       image tags "beta" and "<version>-beta", GitHub pre-release
+# main branch -> Production channel: image tags "production", "latest" and "<version>", GitHub release
+# Versions are <major.minor from VERSION>.<run number>, so every release is unique and increasing.
+on:
+  push:
+    branches: [main, beta]
+    # Docs and the license don't change the image.
+    paths-ignore: ['**.md', 'LICENSE', 'docs/**']
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  IMAGE: ghcr.io/${{ github.repository_owner }}/linktrace
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: 10.0.x
+
+      - run: dotnet restore
+      - run: dotnet build --no-restore -c Release
+      - run: dotnet test --no-build -c Release
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Work out version and channel
+        id: meta
+        run: |
+          base=$(tr -d '[:space:]' < VERSION)
+          if [ "$GITHUB_REF_NAME" = "main" ]; then
+            version="$base.$GITHUB_RUN_NUMBER"
+            echo "channel=Production" >> "$GITHUB_OUTPUT"
+            echo "tags=$IMAGE:$version,$IMAGE:production,$IMAGE:latest" >> "$GITHUB_OUTPUT"
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          else
+            version="$base.$GITHUB_RUN_NUMBER-beta"
+            echo "channel=Beta" >> "$GITHUB_OUTPUT"
+            echo "tags=$IMAGE:$version,$IMAGE:beta" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Releasing $version to the $GITHUB_REF_NAME channel"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Build image for smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: linktrace:smoke
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          cache-from: type=gha,scope=${{ github.ref_name }}
+
+      # Start the real image the ways it's deployed, with bind-mounted folders, and make sure it comes up
+      # as the right user with its database and keys written.
+      - name: Smoke test
+        run: |
+          set -eu
+          smoke() {
+            name=$1 expected_uid=$2; shift 2
+            echo "::group::$name"
+            docker run -d --name "$name" -p 8080:8080 -v "$PWD/$name/data:/data" -v "$PWD/$name/keys:/keys" "$@" linktrace:smoke
+            ok=""
+            for i in $(seq 1 60); do
+              if curl -fsS http://localhost:8080/healthz >/dev/null 2>&1; then ok=1; break; fi
+              sleep 1
+            done
+            docker logs "$name"
+            [ -n "$ok" ] || { echo "$name: never became healthy"; exit 1; }
+            curl -fsS http://localhost:8080/Account/Login > login.html
+            grep -q "Log in" login.html
+            # Every script and stylesheet the page references must load (a missing blazor.web.js leaves the app non-interactive).
+            for asset in $(grep -oE '(src|href)="[^"#:]+\.(js|css)"' login.html | sed -E 's/^(src|href)="//; s/"$//'); do
+              curl -fsS -o /dev/null "http://localhost:8080/$asset" || { echo "$name: $asset failed to load"; exit 1; }
+            done
+            uid=$(docker exec "$name" cat /proc/1/status | awk '/^Uid:/ {print $2}')
+            [ "$uid" = "$expected_uid" ] || { echo "$name: app runs as UID $uid, expected $expected_uid"; exit 1; }
+            [ "$(sudo stat -c %u "$name/data/linktrace.db")" = "$expected_uid" ] || { echo "$name: database not owned by $expected_uid"; exit 1; }
+            sudo sh -c "ls $name/keys/key-*.xml"
+            if docker logs "$name" 2>&1 | grep -E "^(fail|crit):"; then echo "$name: errors in startup logs"; exit 1; fi
+            docker rm -f "$name"
+            echo "::endgroup::"
+          }
+
+          # Unraid: folders freshly created by Docker as root, PUID/PGID set.
+          sudo mkdir -p unraid/data unraid/keys
+          smoke unraid 99 -e PUID=99 -e PGID=100
+
+          # Plain docker run: folders owned by the image's default user, no PUID.
+          sudo mkdir -p defaults/data defaults/keys && sudo chown -R 1654:1654 defaults
+          smoke defaults 1654
+
+          # Explicit non-root user with folders it already owns.
+          sudo mkdir -p nonroot/data nonroot/keys && sudo chown -R 99:100 nonroot
+          smoke nonroot 99 --user 99:100 -e HOME=/tmp
+
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@v7
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.meta.outputs.version }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ github.ref_name }}
+          cache-to: type=gha,mode=max,scope=${{ github.ref_name }}
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.meta.outputs.version }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          PRERELEASE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          cat > notes.md <<EOF
+          **Channel:** $CHANNEL · **Image:** \`$IMAGE:$VERSION\`
+
+          On Unraid, the Docker tab shows **update ready** for the Community Apps install (production), or use **Update Stack** for the beta compose stack.
+          EOF
+
+          flags="--latest"
+          if [ "$PRERELEASE" = "true" ]; then flags="--prerelease --latest=false"; fi
+
+          gh release create "v$VERSION" \
+            --target "$GITHUB_SHA" \
+            --title "Linktrace $VERSION ($CHANNEL)" \
+            --notes-file notes.md \
+            --generate-notes \
+            $flags

@@ -1,0 +1,31 @@
+<MudTable Items="Entries" Dense="Dense" Hover="true" Elevation="0" Breakpoint="Breakpoint.Sm">
+    <HeaderContent>
+        <MudTh>When</MudTh>
+        <MudTh>Who</MudTh>
+        <MudTh>Action</MudTh>
+        <MudTh>What</MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="When" Style="white-space: nowrap" title="@context.TimestampUtc.ToString("u")">
+            @context.TimestampUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")
+        </MudTd>
+        <MudTd DataLabel="Who">@context.UserName</MudTd>
+        <MudTd DataLabel="Action">
+            <MudChip T="string" Size="Size.Small" Color="ActionColor(context.Action)" Variant="Variant.Text">@context.Action @context.EntityType.ToLowerInvariant()</MudChip>
+        </MudTd>
+        <MudTd DataLabel="What">@context.Summary</MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    [Parameter] public IEnumerable<AuditEntry> Entries { get; set; } = [];
+    [Parameter] public bool Dense { get; set; }
+
+    private static Color ActionColor(string action) => action switch
+    {
+        "Created" => Color.Success,
+        "Connected" => Color.Primary,
+        "Deleted" or "Disconnected" => Color.Error,
+        _ => Color.Default
+    };
+}

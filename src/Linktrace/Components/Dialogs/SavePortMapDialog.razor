@@ -1,0 +1,25 @@
+@inherits DialogBase
+@inject PortMapViewService Views
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="Form">
+            <MudTextField @bind-Value="Model.Name" Label="Name" Required="true" MaxLength="100" AutoFocus="true"
+                          Placeholder="e.g. WAN edge, IDF-2 closet" />
+            <MudTextField @bind-Value="Model.Notes" Label="Notes" Lines="2" MaxLength="2000" />
+        </MudForm>
+        <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)" Class="mt-2 d-block">
+            Saves the @Model.DeviceIds.Count device(s) in their current order, plus the display options.
+        </MudText>
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public PortMapView Model { get; set; } = new();
+
+    private Task Save() => SubmitAsync(() => Views.SaveAsync(Model));
+}

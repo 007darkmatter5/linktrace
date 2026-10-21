@@ -1,0 +1,4 @@
+# Shell scripts run inside Linux containers: always LF, even when checked out on Windows.
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.yml text eol=lf

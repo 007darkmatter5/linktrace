@@ -1,0 +1,83 @@
+@inherits DialogBase
+@inject DeviceService Devices
+@inject CableService Cables
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-2">
+            From <b>@Display.Port(FromDeviceName, FromPort.Name, FromPort.Face)</b>
+        </MudText>
+
+        <MudForm @ref="Form">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudAutocomplete T="Device" Value="_targetDevice" ValueChanged="TargetDeviceChanged"
+                                     SearchFunc="SearchDevices" ToStringFunc="@(d => d?.Name)" Label="To device"
+                                     Required="true" RequiredError="Pick a device" OpenOnFocus="true" DebounceInterval="200"
+                                     ResetValueOnEmptyText="true">
+                        <ItemTemplate Context="d">
+                            <MudText Typo="Typo.body2">@d.Name</MudText>
+                            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">@Display.Kind(d.Kind) · @Display.Location(d)</MudText>
+                        </ItemTemplate>
+                    </MudAutocomplete>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="int?" @bind-Value="_targetPortId" Label="To port" Required="true" RequiredError="Pick a port"
+                               Disabled="_targetPorts is null" AnchorOrigin="Origin.BottomCenter"
+                               HelperText="@(_targetPorts is { } tp ? $"{tp.Count(p => p.CableId == null && p.Id != FromPort.Id)} free" : null)">
+                        @foreach (var p in _targetPorts ?? [])
+                        {
+                            var used = p.CableId != null || p.Id == FromPort.Id;
+                            <MudSelectItem T="int?" Value="p.Id" Disabled="used">
+                                @Display.PortOnly(p)@(used ? " — in use" : "")
+                            </MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+
+        <MudDivider Class="my-4" />
+        <CableFields Cable="_cable" />
+
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" SaveText="Connect" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter, EditorRequired] public Port FromPort { get; set; } = default!;
+    [Parameter, EditorRequired] public string FromDeviceName { get; set; } = "";
+
+    private Device? _targetDevice;
+    private List<Port>? _targetPorts;
+    private int? _targetPortId;
+    private readonly Cable _cable = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        _cable.Label = await Cables.SuggestLabelAsync();
+        _cable.CableType = FromPort.MediaType switch
+        {
+            MediaType.LC or MediaType.SC or MediaType.ST or MediaType.MPO => CableType.FiberMultiModeOM4,
+            MediaType.SFPPlus or MediaType.SFP28 or MediaType.QSFP => CableType.DAC,
+            MediaType.Coax => CableType.Coax,
+            MediaType.Console => CableType.Console,
+            _ => CableType.Cat6
+        };
+    }
+
+    private async Task<IEnumerable<Device>> SearchDevices(string? text, CancellationToken _)
+        => await Devices.FindAsync(text);
+
+    private async Task TargetDeviceChanged(Device? device)
+    {
+        _targetDevice = device;
+        _targetPortId = null;
+        _targetPorts = device is null ? null : await Devices.GetPortsAsync(device.Id);
+    }
+
+    private Task Save() => SubmitAsync(() => Cables.ConnectAsync(FromPort.Id, _targetPortId!.Value, _cable));
+}

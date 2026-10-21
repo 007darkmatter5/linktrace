@@ -1,0 +1,96 @@
+@page "/cables"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject CableService CableSvc
+
+<PageTitle>Cables · Linktrace</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h4">Cables</MudText>
+    <MudSpacer />
+    <MudTextField T="string" Value="_search" ValueChanged="SearchChanged" Placeholder="Label, color, device, port…" Immediate="true" DebounceInterval="300"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true"
+                  Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 360px" />
+</MudStack>
+
+<MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mb-2">To add a cable, open a device and click <b>Connect</b> on a port.</MudText>
+
+<MudDataGrid T="CableListItem" Items="_cables" Loading="_loading" Dense="true" Hover="true" Outlined="true"
+             RowsPerPage="50" SortMode="SortMode.Single">
+    <Columns>
+        <PropertyColumn Property="c => c.Label" Title="Label" CellClass="lt-mono" />
+        <PropertyColumn Property="c => Display.CableKind(c.CableType)" Title="Type" />
+        <PropertyColumn Property="c => c.Color" Title="Color" />
+        <PropertyColumn Property="c => c.LengthMeters" Title="Length (m)" Format="0.##" />
+        <TemplateColumn Title="End A" SortBy="@(c => c.EndA == null ? "" : c.EndA.Text)">
+            <CellTemplate>
+                @if (context.Item.EndA is { } a) { <MudLink Href="@($"devices/{a.DeviceId}")" Typo="Typo.body2">@a.Text</MudLink> }
+            </CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="End B" SortBy="@(c => c.EndB == null ? "" : c.EndB.Text)">
+            <CellTemplate>
+                @if (context.Item.EndB is { } b) { <MudLink Href="@($"devices/{b.DeviceId}")" Typo="Typo.body2">@b.Text</MudLink> }
+            </CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="Changed" SortBy="@(c => c.UpdatedUtc)">
+            <CellTemplate>
+                <MudText Typo="Typo.caption">@context.Item.UpdatedUtc.ToLocalTime().ToString("yyyy-MM-dd") · @context.Item.UpdatedBy</MudText>
+            </CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Sortable="false" CellStyle="text-align: right; white-space: nowrap">
+            <CellTemplate>
+                @if (context.Item.EndA is { } start)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Route" Size="Size.Small" Color="Color.Primary" Href="@($"trace/{start.PortId}")" title="Trace" />
+                }
+                @if (CanEdit)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="() => Edit(context.Item)" title="Edit cable" />
+                    <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small" OnClick="() => Disconnect(context.Item)" title="Disconnect" />
+                }
+            </CellTemplate>
+        </TemplateColumn>
+    </Columns>
+    <NoRecordsContent>
+        <MudText>No cables found.</MudText>
+    </NoRecordsContent>
+    <PagerContent>
+        <MudDataGridPager T="CableListItem" />
+    </PagerContent>
+</MudDataGrid>
+
+@code {
+    private List<CableListItem> _cables = [];
+    private string? _search;
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await Load();
+    }
+
+    private async Task Load()
+    {
+        _loading = true;
+        _cables = await CableSvc.SearchAsync(_search);
+        _loading = false;
+    }
+
+    private async Task SearchChanged(string? text) { _search = text; await Load(); }
+
+    private async Task Edit(CableListItem item)
+    {
+        var cable = await CableSvc.GetAsync(item.Id);
+        if (cable is null) { Snackbar.Add("That cable no longer exists.", Severity.Warning); await Load(); return; }
+        cable.Ports = [];
+        if (await Dialogs.OpenAsync<CableDialog, Cable>($"Cable {cable.Label}", new() { { d => d.Model, cable } }) is not null)
+            await Load();
+    }
+
+    private async Task Disconnect(CableListItem item)
+    {
+        if (!await Dialogs.ConfirmAsync("Disconnect", $"Remove cable {item.Label} ({item.EndA?.Text} ↔ {item.EndB?.Text})?", "Disconnect")) return;
+        if (await Snackbar.RunAsync(() => CableSvc.DisconnectAsync(item.Id), "Disconnected")) await Load();
+    }
+}

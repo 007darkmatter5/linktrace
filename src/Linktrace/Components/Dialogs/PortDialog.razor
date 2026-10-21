@@ -1,0 +1,54 @@
+@inherits DialogBase
+@inject DeviceService Devices
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="Form">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="6">
+                    <MudTextField @bind-Value="Model.Name" Label="Name" Required="true" MaxLength="100" AutoFocus="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="PortFace" @bind-Value="Model.Face" Label="Side">
+                        <MudSelectItem Value="PortFace.Standard">Standard port</MudSelectItem>
+                        <MudSelectItem Value="PortFace.Front">Front (patch side)</MudSelectItem>
+                        <MudSelectItem Value="PortFace.Rear">Rear (termination side)</MudSelectItem>
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="MediaType" @bind-Value="Model.MediaType" Label="Connector">
+                        @foreach (var m in Enum.GetValues<MediaType>())
+                        {
+                            <MudSelectItem Value="m">@Display.Media(m)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="int?" @bind-Value="Model.PairedPortId" Label="Passes through to"
+                               HelperText="Other side of this port inside the device (e.g. patch panel front ↔ rear)">
+                        <MudSelectItem T="int?" Value="null">— None —</MudSelectItem>
+                        @foreach (var p in DevicePorts.Where(p => p.Id != Model.Id))
+                        {
+                            <MudSelectItem T="int?" Value="p.Id">@Display.PortOnly(p)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                <MudItem xs="12">
+                    <MudTextField @bind-Value="Model.Description" Label="Description" MaxLength="300"
+                                  HelperText="VLAN, user, purpose…" />
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public Port Model { get; set; } = new();
+    [Parameter] public List<Port> DevicePorts { get; set; } = [];
+
+    private Task Save() => SubmitAsync(() => Devices.SavePortAsync(Model));
+}

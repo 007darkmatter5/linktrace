@@ -1,0 +1,36 @@
+@* Cable property inputs shared by the connect and edit-cable dialogs. *@
+<MudGrid Spacing="2">
+    <MudItem xs="12" sm="6">
+        <MudTextField @bind-Value="Cable.Label" Label="Cable label" MaxLength="100" HelperText="The ID printed on the cable" />
+    </MudItem>
+    <MudItem xs="12" sm="6">
+        <MudSelect T="CableType" @bind-Value="Cable.CableType" Label="Cable type">
+            @foreach (var t in Enum.GetValues<CableType>())
+            {
+                <MudSelectItem Value="t">@Display.CableKind(t)</MudSelectItem>
+            }
+        </MudSelect>
+    </MudItem>
+    <MudItem xs="6">
+        <MudAutocomplete T="string" @bind-Value="Cable.Color" Label="Color" CoerceValue="true" MaxLength="50"
+                         SearchFunc="SearchColors" OpenOnFocus="true" />
+    </MudItem>
+    <MudItem xs="6">
+        <MudNumericField T="decimal?" @bind-Value="Cable.LengthMeters" Label="Length (m)" Min="0" Format="0.##" />
+    </MudItem>
+    <MudItem xs="12">
+        <MudTextField @bind-Value="Cable.Notes" Label="Notes" Lines="2" MaxLength="2000" />
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter, EditorRequired] public Cable Cable { get; set; } = default!;
+
+    private static readonly string[] Colors =
+        ["Blue", "Yellow", "Green", "Red", "Orange", "Purple", "Gray", "White", "Black", "Pink", "Aqua"];
+
+    private Task<IEnumerable<string>> SearchColors(string? text, CancellationToken _) =>
+        Task.FromResult(string.IsNullOrWhiteSpace(text)
+            ? Colors.AsEnumerable()
+            : Colors.Where(c => c.Contains(text, StringComparison.OrdinalIgnoreCase)));
+}

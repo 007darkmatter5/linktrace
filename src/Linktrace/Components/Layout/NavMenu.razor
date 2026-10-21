@@ -1,0 +1,60 @@
+﻿@implements IDisposable
+
+@inject NavigationManager NavigationManager
+
+<MudNavMenu>
+    <AuthorizeView>
+        <Authorized>
+            <MudNavLink Href="" Match="NavLinkMatch.All" Icon="@Icons.Material.Filled.Dashboard">Dashboard</MudNavLink>
+            <MudNavLink Href="locations" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Business">Sites &amp; racks</MudNavLink>
+            <MudNavLink Href="devices" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Dns">Devices</MudNavLink>
+            <MudNavLink Href="cables" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Cable">Cables</MudNavLink>
+            <MudNavLink Href="portmap" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.AccountTree">Port map</MudNavLink>
+            <MudNavLink Href="audit" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.History">Change log</MudNavLink>
+            <MudNavLink Href="transfer" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.ImportExport">Export / import</MudNavLink>
+            @if (context.User.IsInRole(AppRoles.Admin))
+            {
+                <MudNavLink Href="admin/users" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.ManageAccounts">Users</MudNavLink>
+            }
+
+            <MudDivider Class="my-2" />
+            <MudNavLink Href="Account/Manage" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Person">@context.User.Identity?.Name</MudNavLink>
+            <form action="Account/Logout" method="post">
+                <AntiforgeryToken />
+                <input type="hidden" name="ReturnUrl" value="@currentUrl" />
+                <button type="submit" class="mud-nav-link mud-ripple">
+                    <MudIcon Icon="@Icons.Material.Filled.Logout" Color="Color.Info" Class="mr-3"></MudIcon> Log out
+                </button>
+            </form>
+        </Authorized>
+        <NotAuthorized>
+            <MudNavLink Href="Account/Login" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.Login">Log in</MudNavLink>
+            <MudNavLink Href="Account/Register" Match="NavLinkMatch.Prefix" Icon="@Icons.Material.Filled.PersonAdd">Register</MudNavLink>
+        </NotAuthorized>
+    </AuthorizeView>
+</MudNavMenu>
+<MudText Typo="Typo.caption" Class="px-4 py-2 d-block" Style="color: var(--mud-palette-text-disabled)">Linktrace @AppVersion</MudText>
+
+@code {
+    private string? currentUrl;
+
+    // Set at build time (-p:Version=...); strip the "+commit" suffix the SDK appends.
+    private static readonly string AppVersion = (typeof(NavMenu).Assembly
+        .GetCustomAttributes(typeof(System.Reflection.AssemblyInformationalVersionAttribute), false)
+        .OfType<System.Reflection.AssemblyInformationalVersionAttribute>().FirstOrDefault()?.InformationalVersion ?? "dev")
+        .Split('+')[0];
+
+    protected override void OnInitialized()
+    {
+        currentUrl = NavigationManager.ToBaseRelativePath(NavigationManager.Uri);
+        NavigationManager.LocationChanged += OnLocationChanged;
+    }
+
+    private void OnLocationChanged(object? sender, LocationChangedEventArgs e)
+    {
+        currentUrl = NavigationManager.ToBaseRelativePath(e.Location);
+        StateHasChanged();
+    }
+
+    public void Dispose() => NavigationManager.LocationChanged -= OnLocationChanged;
+}

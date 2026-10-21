@@ -1,0 +1,104 @@
+@inherits DialogBase
+@inject LocationService Locations
+@inject DeviceService Devices
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Copies <b>@Source.Name</b> with its @Source.Ports.Count port(s)@(Source.Ports.Any(p => p.PairedPortId != null) ? ", front/rear pairings" : "")@(Source.FaceplateTemplateId != null ? " and faceplate layout" : "").
+            Cables, serial number and management address aren't copied.
+        </MudText>
+
+        @if (_rooms is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else
+        {
+            <MudForm @ref="Form">
+                <MudGrid Spacing="2">
+                    <MudItem xs="12" sm="8">
+                        <MudTextField @bind-Value="Request.Name" Label="@(Request.Copies > 1 ? "Name of the first copy" : "Name")" Required="true"
+                                      MaxLength="100" Immediate="true" AutoFocus="true" />
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField @bind-Value="Request.Copies" Label="How many" Min="1" Max="100" Immediate="true" />
+                    </MudItem>
+                    @if (Request.Copies > 1)
+                    {
+                        <MudItem xs="12">
+                            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                                Names: @PreviewNames
+                            </MudText>
+                        </MudItem>
+                    }
+                    <MudItem xs="12">
+                        <MudSelect T="int" Value="Request.RoomId" ValueChanged="RoomChanged" Label="Site / room" Required="true">
+                            @foreach (var r in _rooms)
+                            {
+                                <MudSelectItem Value="r.Id">@r.Site.Name / @r.Name</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="8">
+                        <MudSelect T="int?" @bind-Value="Request.RackId" Label="Rack" Disabled="RacksInRoom.Count == 0">
+                            <MudSelectItem T="int?" Value="null">— Not in a rack —</MudSelectItem>
+                            @foreach (var k in RacksInRoom)
+                            {
+                                <MudSelectItem T="int?" Value="k.Id">@k.Name (@k.HeightU U)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                    <MudItem xs="12" sm="4">
+                        <MudNumericField T="int?" @bind-Value="Request.RackUnit" Label="Bottom U" Min="1" Max="60"
+                                         Disabled="Request.RackId is null || Request.Copies > 1"
+                                         HelperText="@(Request.Copies > 1 ? "Set positions afterwards" : null)" />
+                    </MudItem>
+                    <MudItem xs="12">
+                        <MudCheckBox @bind-Value="Request.CopyPortDescriptions" Color="Color.Primary" Dense="true">Copy port descriptions</MudCheckBox>
+                        <MudCheckBox @bind-Value="Request.CopyNotes" Color="Color.Primary" Dense="true">Copy device notes</MudCheckBox>
+                    </MudItem>
+                </MudGrid>
+            </MudForm>
+        }
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" SaveText="@(Request.Copies > 1 ? $"Create {Request.Copies} copies" : "Duplicate")" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter, EditorRequired] public Device Source { get; set; } = default!;
+
+    private DuplicateRequest Request { get; } = new();
+    private List<Room>? _rooms;
+
+    private List<Rack> RacksInRoom => _rooms?.FirstOrDefault(r => r.Id == Request.RoomId)?.Racks.OrderBy(r => r.Name).ToList() ?? [];
+
+    private string PreviewNames
+    {
+        get
+        {
+            if (string.IsNullOrWhiteSpace(Request.Name) || Request.Copies < 1) return "";
+            var names = DuplicateRequest.NamesFor(Request.Name, Math.Min(Request.Copies, 100));
+            return names.Count <= 4 ? string.Join(", ", names) : $"{names[0]}, {names[1]}, {names[2]} … {names[^1]}";
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        Request.Name = DuplicateRequest.Suggest(Source.Name);
+        Request.RoomId = Source.RoomId;
+        Request.RackId = Source.RackId;
+        _rooms = await Locations.GetRoomsAsync();
+    }
+
+    private void RoomChanged(int roomId)
+    {
+        if (roomId != Request.RoomId) { Request.RackId = null; Request.RackUnit = null; }
+        Request.RoomId = roomId;
+    }
+
+    private Task Save() => SubmitAsync(() => Devices.DuplicateAsync(Source.Id, Request));
+}

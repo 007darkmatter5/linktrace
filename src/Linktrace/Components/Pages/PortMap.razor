@@ -1,0 +1,524 @@
+@page "/portmap"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject DeviceService DeviceSvc
+@inject PortMapService PortMapSvc
+@inject PortMapViewService Views
+@inject LocationService Locations
+
+<PageTitle>@(_view?.Name ?? "Port map") · Linktrace</PageTitle>
+
+<NavigationLock OnBeforeInternalNavigation="ConfirmLeave" ConfirmExternalNavigation="@(IsDirty && CanEdit)" />
+
+@* ---------- Header: title + saved maps ---------- *@
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2" Class="mb-3">
+    <MudIcon Icon="@Icons.Material.Filled.AccountTree" Size="Size.Large" Color="Color.Primary" />
+    <div>
+        <MudText Typo="Typo.h4">@(_view?.Name ?? "Port map")</MudText>
+        @if (_view is not null)
+        {
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                Saved map@(IsDirty ? " · unsaved changes" : "")@(_view.Notes is null ? "" : $" · {_view.Notes}")
+            </MudText>
+        }
+        else if (_ids.Count > 0)
+        {
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">Not saved yet</MudText>
+        }
+    </div>
+    <MudSpacer />
+    <MudMenu Label="Open saved map" StartIcon="@Icons.Material.Filled.FolderOpen" Variant="Variant.Outlined" Disabled="_saved.Count == 0">
+        @foreach (var v in _saved)
+        {
+            <MudMenuItem OnClick="() => OpenView(v.Id)">@v.Name (@v.DeviceCount devices)</MudMenuItem>
+        }
+    </MudMenu>
+    @if (CanEdit)
+    {
+        @if (_view is not null)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="Save" Disabled="!IsDirty || _busy">Save</MudButton>
+        }
+        <MudButton Variant="@(_view is null ? Variant.Filled : Variant.Outlined)" Color="Color.Primary" StartIcon="@Icons.Material.Filled.SaveAs"
+                   OnClick="SaveAs" Disabled="_ids.Count == 0 || _busy">@(_view is null ? "Save map" : "Save as…")</MudButton>
+        @if (_view is not null)
+        {
+            <MudMenu Icon="@Icons.Material.Filled.MoreVert" Dense="true">
+                <MudMenuItem OnClick="Rename" Icon="@Icons.Material.Filled.Edit">Rename / notes</MudMenuItem>
+                <MudMenuItem OnClick="DeleteView" Icon="@Icons.Material.Filled.Delete">Delete this map</MudMenuItem>
+                <MudMenuItem OnClick="NewMap" Icon="@Icons.Material.Filled.Add">Start a new map</MudMenuItem>
+            </MudMenu>
+        }
+    }
+</MudStack>
+
+<MudGrid Spacing="3">
+    @* ---------- Left: device stack ---------- *@
+    <MudItem xs="12" md="4" lg="3">
+        <MudPaper Outlined="true" Class="pa-3">
+            <MudText Typo="Typo.subtitle1">Devices, top to bottom</MudText>
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">Drag rows to reorder.</MudText>
+
+            @* The native handler gives Firefox the drag data it needs; Blazor handles the rest. *@
+            <div class="mt-2" ondragstart="event.dataTransfer && event.dataTransfer.setData('text/plain', 'row')">
+                @foreach (var (device, index) in OrderedDevices.Select((d, i) => (d, i)))
+                {
+                    <div class="@($"lt-stack-row {(_dropIndex == index && _dragIndex != index ? "drop" : "")}")" draggable="true"
+                         @ondragstart="() => _dragIndex = index" @ondragenter="() => _dropIndex = index"
+                         @ondragend="() => { _dragIndex = null; _dropIndex = null; }"
+                         @ondragover:preventDefault="true" @ondrop="() => DropAt(index)">
+                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Class="lt-stack-handle" />
+                        <MudIcon Icon="@Display.KindIcon(device.Kind)" Size="Size.Small" Color="Color.Primary" />
+                        <div style="flex: 1; min-width: 0">
+                            <div class="lt-stack-name">@device.Name</div>
+                            <div class="lt-stack-sub">@Display.Kind(device.Kind)@(device.RackUnit is int u ? $" · U{u}" : "")</div>
+                        </div>
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" Disabled="index == 0" OnClick="() => Move(index, -1)" title="Move up" />
+                        <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" Disabled="index == _ids.Count - 1" OnClick="() => Move(index, 1)" title="Move down" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="() => Remove(index)" title="Remove from map" />
+                    </div>
+                }
+            </div>
+
+            @if (_ids.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="my-2">No devices yet. Add some below.</MudText>
+            }
+
+            <MudAutocomplete T="Device" @ref="_addBox" ValueChanged="AddDevice" SearchFunc="SearchDevices" Class="mt-3"
+                             ToStringFunc="@(d => d?.Name)" Label="Add a device" OpenOnFocus="true" DebounceInterval="200"
+                             ResetValueOnEmptyText="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Add" Margin="Margin.Dense" />
+            <MudSelect T="int?" Value="null" ValueChanged="AddRack" Label="Add a whole rack" Margin="Margin.Dense">
+                @foreach (var rack in _racks)
+                {
+                    <MudSelectItem T="int?" Value="rack.Id">@rack.Room.Site.Name / @rack.Room.Name / @rack.Name</MudSelectItem>
+                }
+            </MudSelect>
+
+            <MudStack Spacing="0" Class="mt-2">
+                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.GroupAdd" OnClick="AddNeighbors" Disabled="NeighborIds.Count == 0"
+                           Style="justify-content: flex-start">Add cabled devices (@NeighborIds.Count)</MudButton>
+                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Sort" OnClick="SortByRack" Disabled="_ids.Count < 2"
+                           Style="justify-content: flex-start">Sort by rack position</MudButton>
+                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Clear" OnClick="ClearDevices" Disabled="_ids.Count == 0"
+                           Style="justify-content: flex-start">Remove all</MudButton>
+            </MudStack>
+
+            <MudDivider Class="my-2" />
+            <MudSwitch T="bool" Value="_viaPanels" ValueChanged="SetViaPanels" Color="Color.Primary" Label="Follow through patch panels" />
+            <MudSwitch T="bool" Value="_showExternal" ValueChanged="SetShowExternal" Color="Color.Primary" Label="Cables to devices not shown" />
+        </MudPaper>
+
+        @if (_view is null && _ids.Count == 0 && _saved.Count > 0)
+        {
+            <MudPaper Outlined="true" Class="pa-3 mt-3">
+                <MudText Typo="Typo.subtitle1" Class="mb-1">Saved maps</MudText>
+                <MudList T="string" Dense="true">
+                    @foreach (var v in _saved)
+                    {
+                        <MudListItem Icon="@Icons.Material.Filled.AccountTree" OnClick="() => OpenView(v.Id)">
+                            @v.Name <span style="color: var(--mud-palette-text-secondary)">· @v.DeviceCount devices</span>
+                        </MudListItem>
+                    }
+                </MudList>
+            </MudPaper>
+        }
+    </MudItem>
+
+    @* ---------- Right: the map ---------- *@
+    <MudItem xs="12" md="8" lg="9">
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_scene is null)
+        {
+            <MudAlert Severity="Severity.Info">
+                Add devices on the left, or pick a whole rack, to draw the map. @(_saved.Count > 0 ? "You can also open a saved map." : "")
+            </MudAlert>
+        }
+        else
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="3" Class="mb-2">
+                <MudText Typo="Typo.subtitle1">@Summary</MudText>
+                <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                    <span class="lt-legend-swatch" style="background: var(--mud-palette-success)"></span>connected
+                    <span class="lt-legend-swatch ml-3" style="background: var(--mud-palette-surface)"></span>free
+                    <span class="ml-3">—— cable</span>
+                    <span class="ml-3">- - - through patch panels</span>
+                </MudText>
+            </MudStack>
+
+            <MudPaper Outlined="true" Class="pa-3 mb-3">
+                <PortMapSvg Scene="_scene" SelectedPortId="_selectedPort?.Id" SelectedLine="_selectedLine"
+                            OnPortClick="SelectPort" OnLineClick="SelectLine" OnDeviceClick="@(d => Nav.NavigateTo($"devices/{d.Id}"))" />
+            </MudPaper>
+
+            @if (_selectedLine is { } line)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="3">
+                        <MudIcon Icon="@Icons.Material.Filled.Cable" Style="@($"color: {line.Color}")" />
+                        <div>
+                            <MudText Typo="Typo.subtitle1"><b>@LineEnds(line)</b></MudText>
+                            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">@LineDetails(line)</MudText>
+                        </div>
+                        <MudSpacer />
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Route"
+                                   Href="@($"trace/{line.Link?.PortAId ?? line.External!.PortId}")">Full trace</MudButton>
+                        @if (line.External is { } ext && !_ids.Contains(ext.FarDeviceId))
+                        {
+                            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" OnClick="() => AddIds([ext.FarDeviceId])">Add that device</MudButton>
+                        }
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="() => _selectedLine = null" />
+                    </MudStack>
+                </MudPaper>
+            }
+            else if (_selectedPort is { } port)
+            {
+                <MudPaper Outlined="true" Class="pa-3 mb-3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="3">
+                        <div>
+                            <MudText Typo="Typo.subtitle1"><b>@PortText(port.Id)</b></MudText>
+                            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">@(port.CableId is null ? "Not connected" : "Connected")@(port.Description is null ? "" : $" · {port.Description}")</MudText>
+                        </div>
+                        <MudSpacer />
+                        <MudButton Variant="Variant.Outlined" Href="@($"devices/{port.DeviceId}")">Open device</MudButton>
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Route" Href="@($"trace/{port.Id}")">Trace</MudButton>
+                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="() => _selectedPort = null" />
+                    </MudStack>
+                </MudPaper>
+            }
+
+            @if (_scene.Lines.Count > 0)
+            {
+                <MudTable Items="_scene.Lines" Dense="true" Hover="true" Outlined="true" Breakpoint="Breakpoint.Sm"
+                          OnRowClick="@((TableRowClickEventArgs<DrawnLink> e) => SelectLine(e.Item!))" RowClass="lt-clickable">
+                    <HeaderContent>
+                        <MudTh></MudTh>
+                        <MudTh>From</MudTh>
+                        <MudTh>To</MudTh>
+                        <MudTh>Cable</MudTh>
+                    </HeaderContent>
+                    <RowTemplate>
+                        <MudTd><span class="lt-legend-swatch" style="@($"background: {context.Color}")"></span></MudTd>
+                        <MudTd DataLabel="From">@PortText(context.Link?.PortAId ?? context.External!.PortId)</MudTd>
+                        <MudTd DataLabel="To">@(context.Link is { } l ? PortText(l.PortBId) : context.External!.FarText)</MudTd>
+                        <MudTd DataLabel="Cable">@LineDetails(context)</MudTd>
+                    </RowTemplate>
+                </MudTable>
+            }
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    [SupplyParameterFromQuery(Name = "view")] public int? ViewId { get; set; }
+    [SupplyParameterFromQuery(Name = "d")] public string? DeviceList { get; set; }
+
+    // Current state (what's on screen).
+    private List<int> _ids = [];
+    private bool _viaPanels = true;
+    private bool _showExternal = true;
+
+    // The saved map being edited, as last saved (null = unsaved map).
+    private PortMapView? _view;
+    private List<PortMapViewInfo> _saved = [];
+
+    private readonly Dictionary<int, Device> _deviceCache = [];
+    private List<Rack> _racks = [];
+    private List<int> _neighborIds = [];
+    private PortMapData? _map;
+    private PortMapScene? _scene;
+    private bool _loading, _busy, _leaveConfirmed;
+    private Port? _selectedPort;
+    private DrawnLink? _selectedLine;
+    private int? _dragIndex, _dropIndex;
+    private MudAutocomplete<Device> _addBox = default!;
+
+    private List<Device> OrderedDevices => _ids.Where(_deviceCache.ContainsKey).Select(id => _deviceCache[id]).ToList();
+    private List<int> NeighborIds => _neighborIds.Except(_ids).ToList();
+
+    private bool IsDirty => _view is not null
+        ? !_ids.SequenceEqual(_view.DeviceIds) || _viaPanels != _view.FollowPassThrough || _showExternal != _view.ShowExternal
+        : _ids.Count > 0;
+
+    private string Summary
+    {
+        get
+        {
+            var direct = _map!.Links.Count(l => l.IsDirect);
+            var via = _map.Links.Count(l => !l.IsDirect);
+            return $"{direct} cable(s) between these devices"
+                + (_viaPanels && via > 0 ? $", {via} through patch panels" : "")
+                + (_showExternal ? $", {_map.Externals.Count} to other devices" : "");
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        _racks = (await Locations.GetRoomsAsync()).SelectMany(r => r.Racks.Select(k => { k.Room = r; return k; }))
+            .OrderBy(k => k.Room.Site.Name).ThenBy(k => k.Room.Name).ThenBy(k => k.Name).ToList();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _leaveConfirmed = false;
+        _deviceCache.Clear(); // fresh port/cable state each time a map is opened
+        _saved = await Views.GetAllAsync();
+        _view = null;
+
+        if (ViewId is int vid)
+        {
+            _view = await Views.GetAsync(vid);
+            if (_view is null) Snackbar.Add("That saved map no longer exists.", Severity.Warning);
+        }
+
+        if (_view is not null)
+        {
+            _ids = [.. _view.DeviceIds];
+            _viaPanels = _view.FollowPassThrough;
+            _showExternal = _view.ShowExternal;
+        }
+        else
+        {
+            // Links from device and rack pages pass a starting list of devices.
+            _ids = (DeviceList ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
+                .Select(s => int.TryParse(s, out var n) ? n : 0).Where(n => n > 0).Distinct().ToList();
+        }
+        await Reload();
+    }
+
+    // ---------- Building the map ----------
+
+    /// <summary>Reloads connection data (needed when the set of devices or the options change).</summary>
+    private async Task Reload()
+    {
+        _loading = true;
+        _selectedLine = null;
+        _selectedPort = null;
+
+        foreach (var id in _ids.Where(id => !_deviceCache.ContainsKey(id)).ToList())
+        {
+            if (await DeviceSvc.GetAsync(id) is { } d) _deviceCache[id] = d;
+            else _ids.Remove(id); // deleted since the map was saved
+        }
+
+        if (_ids.Count == 0)
+        {
+            _map = null;
+            _neighborIds = [];
+        }
+        else
+        {
+            _map = await PortMapSvc.GetMapAsync(_ids, _viaPanels);
+            _neighborIds = _map.Externals.Select(e => e.FarDeviceId).Distinct().ToList();
+        }
+        Redraw();
+        _loading = false;
+    }
+
+    /// <summary>Re-lays out the drawing only (enough for reordering).</summary>
+    private void Redraw()
+    {
+        _scene = _map is null || _ids.Count == 0 ? null
+            : PortMapScene.Build(OrderedDevices, _map.Links, _showExternal ? _map.Externals : []);
+        _selectedLine = null;
+    }
+
+    // ---------- Editing the stack ----------
+
+    private async Task AddIds(IEnumerable<int> ids)
+    {
+        var added = ids.Where(id => !_ids.Contains(id)).Distinct().ToList();
+        if (added.Count == 0) return;
+        _ids.AddRange(added);
+        await Reload();
+    }
+
+    private async Task<IEnumerable<Device>> SearchDevices(string? text, CancellationToken _)
+        => (await DeviceSvc.FindAsync(text)).Where(d => !_ids.Contains(d.Id));
+
+    private async Task AddDevice(Device? d)
+    {
+        if (d is null) return;
+        await _addBox.ClearAsync();
+        await AddIds([d.Id]);
+    }
+
+    private async Task AddRack(int? rackId)
+    {
+        if (rackId is int id) await AddIds(await PortMapSvc.GetRackDeviceIdsAsync(id));
+    }
+
+    private Task AddNeighbors() => AddIds(NeighborIds);
+
+    private async Task Remove(int index)
+    {
+        _ids.RemoveAt(index);
+        await Reload();
+    }
+
+    private async Task ClearDevices()
+    {
+        _ids.Clear();
+        await Reload();
+    }
+
+    private void Move(int index, int delta)
+    {
+        var target = index + delta;
+        if (target < 0 || target >= _ids.Count) return;
+        (_ids[index], _ids[target]) = (_ids[target], _ids[index]);
+        Redraw();
+    }
+
+    private void DropAt(int index)
+    {
+        if (_dragIndex is int from && from != index)
+        {
+            var id = _ids[from];
+            _ids.RemoveAt(from);
+            _ids.Insert(index, id);
+            Redraw();
+        }
+        _dragIndex = null;
+        _dropIndex = null;
+    }
+
+    private async Task SortByRack()
+    {
+        _ids = await Views.SortByLocationAsync(_ids);
+        Redraw();
+    }
+
+    private async Task SetViaPanels(bool value) { _viaPanels = value; await Reload(); }
+    private void SetShowExternal(bool value) { _showExternal = value; Redraw(); }
+
+    // ---------- Saved maps ----------
+
+    private PortMapView Snapshot(PortMapView? from = null) => new()
+    {
+        Id = from?.Id ?? 0,
+        Version = from?.Version ?? Guid.Empty,
+        Name = from?.Name ?? "",
+        Notes = from?.Notes,
+        DeviceIds = [.. _ids],
+        FollowPassThrough = _viaPanels,
+        ShowExternal = _showExternal
+    };
+
+    private async Task Save()
+    {
+        if (_view is null) { await SaveAs(); return; }
+        _busy = true;
+        PortMapView? saved = null;
+        if (await Snackbar.RunAsync(async () => saved = await Views.SaveAsync(Snapshot(_view)), "Map saved"))
+        {
+            _view = saved;
+            _saved = await Views.GetAllAsync();
+        }
+        _busy = false;
+    }
+
+    private async Task SaveAs()
+    {
+        var model = Snapshot();
+        model.Name = _view is null ? SuggestName() : $"{_view.Name} copy";
+        model.Notes = _view?.Notes;
+        var saved = await Dialogs.OpenAsync<SavePortMapDialog, PortMapView>(_view is null ? "Save port map" : "Save as a new map",
+            new() { { d => d.Model, model } });
+        if (saved is null) return;
+        Snackbar.Add($"Saved '{saved.Name}'", Severity.Success);
+        _view = saved;           // no longer dirty, so navigating doesn't prompt
+        Go($"portmap?view={saved.Id}");
+    }
+
+    private async Task Rename()
+    {
+        if (_view is null) return;
+        var model = Snapshot(_view);
+        // Keep the saved device list; only the name and notes change here.
+        model.DeviceIds = [.. _view.DeviceIds];
+        model.FollowPassThrough = _view.FollowPassThrough;
+        model.ShowExternal = _view.ShowExternal;
+        var saved = await Dialogs.OpenAsync<SavePortMapDialog, PortMapView>("Rename map", new() { { d => d.Model, model } });
+        if (saved is null) return;
+        _view = saved;
+        _saved = await Views.GetAllAsync();
+    }
+
+    private async Task DeleteView()
+    {
+        if (_view is null || !await Dialogs.ConfirmAsync("Delete map", $"Delete the saved map '{_view.Name}'? The devices and cables aren't affected.")) return;
+        if (await Snackbar.RunAsync(() => Views.DeleteAsync(_view.Id), "Map deleted"))
+        {
+            _view = null;
+            _ids.Clear();
+            Go("portmap");
+        }
+    }
+
+    private void NewMap() => Nav.NavigateTo("portmap");
+
+    private void OpenView(int id) => Nav.NavigateTo($"portmap?view={id}");
+
+    private string SuggestName()
+    {
+        var first = OrderedDevices.FirstOrDefault();
+        var name = first?.Rack?.Name ?? first?.Name ?? "Port map";
+        for (var i = 2; _saved.Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase)); i++)
+            name = $"{first?.Rack?.Name ?? first?.Name ?? "Port map"} ({i})";
+        return name;
+    }
+
+    /// <summary>Navigate without the unsaved-changes prompt (we just saved or deleted).</summary>
+    private void Go(string url)
+    {
+        _leaveConfirmed = true;
+        Nav.NavigateTo(url);
+    }
+
+    private async Task ConfirmLeave(LocationChangingContext context)
+    {
+        if (_leaveConfirmed || !IsDirty || !CanEdit) return;
+        // Clicking a device name or "Full trace" is fine to do mid-edit only if they confirm.
+        if (!await Dialogs.ConfirmAsync("Unsaved changes", "This map has changes that aren't saved. Leave anyway?", "Leave"))
+            context.PreventNavigation();
+        else
+            _leaveConfirmed = true;
+    }
+
+    // ---------- Selection & text ----------
+
+    private void SelectPort(Port p)
+    {
+        var line = _scene?.Lines.FirstOrDefault(l => l.Link?.PortAId == p.Id || l.Link?.PortBId == p.Id || l.External?.PortId == p.Id);
+        if (line is not null) { SelectLine(line); return; }
+        _selectedLine = null;
+        _selectedPort = _selectedPort?.Id == p.Id ? null : p;
+    }
+
+    private void SelectLine(DrawnLink line)
+    {
+        _selectedPort = null;
+        _selectedLine = _selectedLine is { } s && (s.Link ?? (object?)s.External) == (line.Link ?? (object?)line.External) ? null : line;
+    }
+
+    private string PortText(int portId) => _scene?.FindPort(portId) is { } p && _scene.DeviceOfPort(portId) is { } d
+        ? Display.Port(d.Device.Name, p.Name, p.Face) : "?";
+
+    private string LineEnds(DrawnLink line) => line.Link is { } l
+        ? $"{PortText(l.PortAId)} ↔ {PortText(l.PortBId)}"
+        : $"{PortText(line.External!.PortId)} → {line.External.FarText}";
+
+    private static string LineDetails(DrawnLink line)
+    {
+        var cable = line.Link?.Cable ?? line.External?.Cable;
+        var count = line.Link?.CableCount ?? line.External!.CableCount;
+        if (cable is null) return count > 1 ? $"Through patch panels · {count} cables" : "Cable";
+        return string.Join(" · ", new[] { cable.Label ?? "Unlabelled cable", Display.CableKind(cable.CableType), cable.Color, cable.LengthMeters is { } m ? $"{m:0.##} m" : null }
+            .Where(x => !string.IsNullOrEmpty(x)));
+    }
+}

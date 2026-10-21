@@ -1,0 +1,32 @@
+# Linktrace Beta on Unraid
+#
+# For the Docker Compose Manager plugin (Apps > "Docker Compose Manager"):
+#   Docker tab > Compose > Add New Stack > name it "linktrace-beta" > Edit Stack > Compose File > paste this file > Save
+#   then Compose Up.
+#
+# Open http://<your-unraid-ip>:5011 and register the first account (it becomes the admin).
+# To update to the newest beta: Update Stack (pulls the image and recreates the container).
+#
+# Data lives in /mnt/user/appdata/linktrace-beta:
+#   data/  the SQLite database (linktrace.db)
+#   keys/  keys that sign login cookies. Keep them with the data.
+#
+# The container gives those folders to PUID:PGID when it starts, then runs Linktrace as that user (not root).
+
+name: linktrace-beta
+
+services:
+  linktrace-beta:
+    image: ghcr.io/007darkmatter5/linktrace:beta
+    container_name: linktrace-beta
+    restart: unless-stopped
+    ports:
+      - "5011:8080"                      # change the left number if 5011 is taken
+    environment:
+      PUID: 99                           # nobody
+      PGID: 100                          # users
+      # ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"   # when a reverse proxy handles HTTPS in front of it
+    volumes:
+      - /mnt/user/appdata/linktrace-beta/data:/data
+      - /mnt/user/appdata/linktrace-beta/keys:/keys
+      - /etc/localtime:/etc/localtime:ro

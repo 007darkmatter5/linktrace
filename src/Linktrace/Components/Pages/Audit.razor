@@ -1,0 +1,31 @@
+@page "/audit"
+@attribute [Authorize]
+@inject AuditService AuditLog
+
+<PageTitle>Change log · Linktrace</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h4">Change log</MudText>
+    <MudSpacer />
+    <MudTextField T="string" Value="_search" ValueChanged="SearchChanged" Placeholder="Search changes" Immediate="true" DebounceInterval="300"
+                  Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true"
+                  Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 360px" />
+</MudStack>
+
+<MudPaper Outlined="true">
+    <AuditTable Entries="_entries" Dense="true" />
+</MudPaper>
+<MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)" Class="mt-2">Showing the latest @_entries.Count changes.</MudText>
+
+@code {
+    private List<AuditEntry> _entries = [];
+    private string? _search;
+
+    protected override async Task OnInitializedAsync() => _entries = await AuditLog.GetAsync(max: 500);
+
+    private async Task SearchChanged(string? text)
+    {
+        _search = text;
+        _entries = await AuditLog.GetAsync(text, max: 500);
+    }
+}

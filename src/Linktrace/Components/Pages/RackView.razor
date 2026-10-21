@@ -1,0 +1,150 @@
+@page "/racks/{Id:int}"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject LocationService Locations
+
+<PageTitle>@(_rack?.Name ?? "Rack") · Linktrace</PageTitle>
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" />
+    return;
+}
+@if (_rack is null)
+{
+    <MudAlert Severity="Severity.Warning">Rack not found.</MudAlert>
+    return;
+}
+
+<MudBreadcrumbs Items="_crumbs" Class="px-0" />
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.ViewColumn" Size="Size.Large" Color="Color.Primary" />
+    <div>
+        <MudText Typo="Typo.h4">@_rack.Name</MudText>
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">@_rack.HeightU U · @_rack.Devices.Count device(s)@(_rack.Notes is null ? "" : $" · {_rack.Notes}")</MudText>
+    </div>
+    <MudSpacer />
+    @if (_rack.Devices.Count > 0)
+    {
+        <MudButton StartIcon="@Icons.Material.Filled.AccountTree" Variant="Variant.Outlined" Href="@PortMapHref">Port map</MudButton>
+    }
+    @if (CanEdit)
+    {
+        <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary" OnClick="AddDevice">Add device</MudButton>
+        <MudIconButton Icon="@Icons.Material.Filled.Edit" OnClick="EditRack" title="Edit rack" />
+        <MudIconButton Icon="@Icons.Material.Filled.Delete" OnClick="DeleteRack" title="Delete rack" />
+    }
+</MudStack>
+
+<MudGrid>
+    <MudItem xs="12" md="7">
+        <MudPaper Outlined="true" Class="pa-2 lt-rack">
+            @foreach (var slot in Slots())
+            {
+                <div class="lt-rack-slot" style="height: @(30 * slot.Height)px">
+                    <div class="lt-rack-unit">@(slot.Height > 1 ? $"{slot.Top}–{slot.Top - slot.Height + 1}" : slot.Top.ToString())</div>
+                    @if (slot.Device is { } d)
+                    {
+                        <div class="lt-rack-device" @onclick="@(() => Nav.NavigateTo($"devices/{d.Id}"))" title="@d.Model">
+                            <MudIcon Icon="@Display.KindIcon(d.Kind)" Size="Size.Small" />
+                            <b>@d.Name</b>
+                            <span style="opacity: .8">@d.Ports.Count(p => p.CableId != null)/@d.Ports.Count ports used</span>
+                        </div>
+                    }
+                </div>
+            }
+        </MudPaper>
+    </MudItem>
+    <MudItem xs="12" md="5">
+        @{ var unplaced = _rack.Devices.Where(d => d.RackUnit is null).OrderBy(d => d.Name).ToList(); }
+        @if (unplaced.Count > 0)
+        {
+            <MudPaper Outlined="true" Class="pa-4">
+                <MudText Typo="Typo.subtitle1" GutterBottom="true">In this rack, no position set</MudText>
+                <MudList T="string" Dense="true">
+                    @foreach (var d in unplaced)
+                    {
+                        <MudListItem Icon="@Display.KindIcon(d.Kind)" Href="@($"devices/{d.Id}")">@d.Name</MudListItem>
+                    }
+                </MudList>
+            </MudPaper>
+        }
+    </MudItem>
+</MudGrid>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private Rack? _rack;
+    private bool _loading = true;
+    private List<BreadcrumbItem> _crumbs = [];
+
+    private record Slot(int Top, int Height, Device? Device);
+
+    /// <summary>Port map of the rack's devices, top of the rack first.</summary>
+    private string PortMapHref => "portmap?d=" + string.Join(",", _rack!.Devices
+        .OrderByDescending(d => d.RackUnit is int u ? u + d.HeightU - 1 : int.MinValue).ThenBy(d => d.Name).Select(d => d.Id));
+
+    protected override async Task OnParametersSetAsync() => await Load();
+
+    private async Task Load()
+    {
+        _loading = true;
+        _rack = await Locations.GetRackAsync(Id);
+        _loading = false;
+        if (_rack is not null)
+        {
+            _crumbs =
+            [
+                new("Sites & racks", "locations"),
+                new(_rack.Room.Site.Name, "locations"),
+                new(_rack.Room.Name, $"devices?roomId={_rack.RoomId}"),
+                new(_rack.Name, null, disabled: true)
+            ];
+        }
+    }
+
+    /// <summary>Rack units from the top down, merging multi-U devices into one slot.</summary>
+    private IEnumerable<Slot> Slots()
+    {
+        var placed = _rack!.Devices.Where(d => d.RackUnit is not null).ToList();
+        var u = _rack.HeightU;
+        while (u >= 1)
+        {
+            var d = placed.FirstOrDefault(x => x.RackUnit + x.HeightU - 1 == u);
+            if (d is not null)
+            {
+                yield return new Slot(u, d.HeightU, d);
+                u -= d.HeightU;
+            }
+            else
+            {
+                yield return new Slot(u, 1, null);
+                u--;
+            }
+        }
+    }
+
+    private async Task AddDevice()
+    {
+        var model = new Device { RoomId = _rack!.RoomId, RackId = _rack.Id, Kind = DeviceKind.PatchPanel };
+        if (await Dialogs.OpenAsync<DeviceDialog, Device>("Add device", new() { { d => d.Model, model } }, MaxWidth.Medium) is { } created)
+            Nav.NavigateTo($"devices/{created.Id}");
+    }
+
+    private async Task EditRack()
+    {
+        var copy = _rack!.EditCopy();
+        copy.Devices = [];
+        if (await Dialogs.OpenAsync<RackDialog, Rack>("Edit rack", new() { { d => d.Model, copy } }) is not null)
+            await Load();
+    }
+
+    private async Task DeleteRack()
+    {
+        if (!await Dialogs.ConfirmAsync("Delete rack", $"Delete rack '{_rack!.Name}'?")) return;
+        if (await Snackbar.RunAsync(() => Locations.DeleteRackAsync(_rack.Id), "Rack deleted"))
+            Nav.NavigateTo("locations");
+    }
+}

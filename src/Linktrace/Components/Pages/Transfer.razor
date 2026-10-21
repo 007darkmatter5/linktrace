@@ -1,0 +1,188 @@
+@page "/transfer"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject TransferService TransferSvc
+
+<PageTitle>Export / import · Linktrace</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudIcon Icon="@Icons.Material.Filled.ImportExport" Size="Size.Large" Color="Color.Primary" />
+    <MudText Typo="Typo.h4">Export / import</MudText>
+</MudStack>
+
+<MudGrid>
+    <MudItem xs="12" md="5">
+        <MudPaper Outlined="true" Class="pa-4">
+            <MudText Typo="Typo.h6" GutterBottom="true">Export</MudText>
+            <MudText Typo="Typo.body2" Class="mb-3">
+                Downloads everything as one JSON file: sites, rooms, racks, devices, ports, cables, faceplate layouts and saved port maps.
+                Use it as a backup or to move your data to another Linktrace instance.
+            </MudText>
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)" Class="d-block mb-3">
+                Not included: user accounts and the change log, since those belong to each instance.
+            </MudText>
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Download"
+                       OnClick="@(() => Nav.NavigateTo("api/export", forceLoad: true))">Download export</MudButton>
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" md="7">
+        <MudPaper Outlined="true" Class="pa-4">
+            <MudText Typo="Typo.h6" GutterBottom="true">Import</MudText>
+            @if (!_isAdmin)
+            {
+                <MudAlert Severity="Severity.Info">Only admins can import data.</MudAlert>
+            }
+            else
+            {
+                <MudText Typo="Typo.body2" Class="mb-3">
+                    Load a file exported from Linktrace. You'll see what's in it before anything changes.
+                </MudText>
+
+                <MudFileUpload T="IBrowserFile" FilesChanged="FileChosen" Accept=".json,application/json" MaxFileSize="MaxBytes">
+                    <CustomContent>
+                        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.UploadFile" OnClick="@(() => context.OpenFilePickerAsync())"
+                                   Disabled="_busy">Choose export file…</MudButton>
+                    </CustomContent>
+                </MudFileUpload>
+
+                @if (_busy) { <MudProgressLinear Indeterminate="true" Class="mt-3" /> }
+                @if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mt-3">@_error</MudAlert> }
+
+                @if (_preview is { } p)
+                {
+                    <MudDivider Class="my-4" />
+                    <MudText Typo="Typo.subtitle1"><b>@_fileName</b></MudText>
+                    <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mb-2">
+                        Exported @p.File.ExportedUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm")@(p.File.ExportedBy is null ? "" : $" by {p.File.ExportedBy}")
+                    </MudText>
+
+                    <MudSimpleTable Dense="true" Elevation="0" Class="mb-3" Style="max-width: 360px">
+                        <tbody>
+                            @foreach (var (what, count) in p.Counts)
+                            {
+                                <tr><td>@what</td><td style="text-align: right"><b>@count.ToString("N0")</b></td></tr>
+                            }
+                        </tbody>
+                    </MudSimpleTable>
+
+                    @if (!p.CanImport)
+                    {
+                        <MudAlert Severity="Severity.Error" Class="mb-3">
+                            This file can't be imported:
+                            <ul class="ml-4">
+                                @foreach (var problem in p.Problems) { <li>@problem</li> }
+                            </ul>
+                        </MudAlert>
+                    }
+                    else
+                    {
+                        <MudRadioGroup T="ImportMode" @bind-Value="_mode">
+                            <MudRadio Value="ImportMode.Merge" Color="Color.Primary">
+                                <b>Add to what's here</b> — keep existing data and add the file's contents
+                            </MudRadio>
+                            <MudRadio Value="ImportMode.Replace" Color="Color.Error">
+                                <b>Replace everything</b> — delete all sites, devices, cables, layouts and port maps here first
+                            </MudRadio>
+                        </MudRadioGroup>
+
+                        @if (_mode == ImportMode.Merge && p.MergeRenames.Count > 0)
+                        {
+                            <MudAlert Severity="Severity.Info" Dense="true" Class="mt-2">
+                                @p.MergeRenames.Count name(s) already exist here and will get “(imported)” added, e.g. @string.Join(", ", p.MergeRenames.Take(3))@(p.MergeRenames.Count > 3 ? "…" : "").
+                            </MudAlert>
+                        }
+                        @if (_mode == ImportMode.Replace)
+                        {
+                            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-2">
+                                Everything currently in this instance will be deleted. Download an export first if you might want it back.
+                            </MudAlert>
+                        }
+
+                        <MudStack Row="true" Class="mt-3">
+                            <MudButton Variant="Variant.Filled" Color="@(_mode == ImportMode.Replace ? Color.Error : Color.Primary)"
+                                       StartIcon="@Icons.Material.Filled.Upload" OnClick="Import" Disabled="_busy">
+                                @(_mode == ImportMode.Replace ? "Replace and import" : "Import")
+                            </MudButton>
+                            <MudButton Variant="Variant.Text" OnClick="Reset" Disabled="_busy">Cancel</MudButton>
+                        </MudStack>
+                    }
+                }
+
+                @if (_result is { } r)
+                {
+                    <MudAlert Severity="Severity.Success" Class="mt-4">
+                        Imported @string.Join(", ", r.Counts.Where(kv => kv.Value > 0).Select(kv => $"{kv.Value:N0} {kv.Key.ToLowerInvariant()}")).
+                        @if (r.Renamed.Count > 0)
+                        {
+                            <div class="mt-1">Renamed to avoid clashes: @string.Join("; ", r.Renamed.Take(10))@(r.Renamed.Count > 10 ? $" and {r.Renamed.Count - 10} more" : "").</div>
+                        }
+                    </MudAlert>
+                }
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+
+@code {
+    private const long MaxBytes = 200L * 1024 * 1024; // 200 MB
+
+    private bool _isAdmin, _busy;
+    private string? _fileName, _error;
+    private ImportPreview? _preview;
+    private ImportResult? _result;
+    private ImportMode _mode = ImportMode.Merge;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        _isAdmin = await CurrentUser.IsAdminAsync();
+    }
+
+    private async Task FileChosen(IBrowserFile? file)
+    {
+        Reset();
+        if (file is null) return;
+        _busy = true;
+        _fileName = file.Name;
+        try
+        {
+            // Copy to memory first: parsing straight from the browser stream is slow for big files.
+            using var buffer = new MemoryStream();
+            await using (var upload = file.OpenReadStream(MaxBytes)) await upload.CopyToAsync(buffer);
+            buffer.Position = 0;
+            _preview = await TransferSvc.PreviewAsync(buffer);
+            _mode = ImportMode.Merge;
+        }
+        catch (LinktraceException ex) { _error = ex.Message; }
+        catch (IOException ex) { _error = $"Couldn't read the file: {ex.Message}"; }
+        finally { _busy = false; }
+    }
+
+    private async Task Import()
+    {
+        if (_preview is null) return;
+        if (_mode == ImportMode.Replace &&
+            !await Dialogs.ConfirmAsync("Replace everything", "Delete all network data in this instance and load the file instead? This can't be undone.", "Replace"))
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            _result = await TransferSvc.ImportAsync(_preview.File, _mode);
+            _preview = null;
+            Snackbar.Add("Import finished", Severity.Success);
+        }
+        catch (LinktraceException ex) { _error = ex.Message; }
+        finally { _busy = false; }
+    }
+
+    private void Reset()
+    {
+        _preview = null;
+        _result = null;
+        _error = null;
+        _fileName = null;
+    }
+}

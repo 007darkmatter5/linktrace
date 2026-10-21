@@ -1,0 +1,23 @@
+@inherits DialogBase
+@inject LocationService Locations
+
+<MudDialog>
+    <DialogContent>
+        <MudForm @ref="Form">
+            <MudTextField @bind-Value="Model.Name" Label="Name" Required="true" MaxLength="100" AutoFocus="true"
+                          HelperText="Server room, IDF closet, office 2.14…" />
+            <MudTextField @bind-Value="Model.Floor" Label="Floor" MaxLength="50" />
+            <MudTextField @bind-Value="Model.Notes" Label="Notes" Lines="3" MaxLength="2000" />
+        </MudForm>
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public Room Model { get; set; } = new();
+
+    private Task Save() => SubmitAsync(() => Locations.SaveRoomAsync(Model));
+}

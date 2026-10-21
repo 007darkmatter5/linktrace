@@ -1,0 +1,83 @@
+﻿@page "/"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject SearchService Search
+@inject AuditService AuditLog
+
+<PageTitle>Dashboard · Linktrace</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Dashboard</MudText>
+
+@if (_stats is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+    return;
+}
+
+<MudGrid Class="mb-4">
+    <MudItem xs="12" sm="6" md="3">
+        <StatTile Icon="@Icons.Material.Filled.Business" Label="Sites / rooms / racks"
+                  Value="@($"{_stats.Sites} / {_stats.Rooms} / {_stats.Racks}")" Href="locations" />
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <StatTile Icon="@Icons.Material.Filled.Dns" Label="Devices" Value="@_stats.Devices.ToString("N0")" Href="devices" />
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <StatTile Icon="@Icons.Material.Filled.SettingsEthernet" Label="Ports in use"
+                  Value="@($"{_stats.ConnectedPorts:N0} of {_stats.Ports:N0}")" Href="devices">
+            <MudProgressLinear Value="@(_stats.Ports == 0 ? 0 : 100.0 * _stats.ConnectedPorts / _stats.Ports)" Class="mt-2" Rounded="true" />
+        </StatTile>
+    </MudItem>
+    <MudItem xs="12" sm="6" md="3">
+        <StatTile Icon="@Icons.Material.Filled.Cable" Label="Cables" Value="@_stats.Cables.ToString("N0")" Href="cables" />
+    </MudItem>
+</MudGrid>
+
+@if (_stats.Devices == 0)
+{
+    <MudPaper Class="pa-6 mb-4" Outlined="true">
+        <MudText Typo="Typo.h6" GutterBottom="true">Getting started</MudText>
+        <MudList T="string" Dense="true" ReadOnly="true">
+            <MudListItem Icon="@Icons.Material.Filled.LooksOne">Add a <b>site</b>, then the <b>rooms</b> and <b>racks</b> inside it (Sites &amp; racks).</MudListItem>
+            <MudListItem Icon="@Icons.Material.Filled.LooksTwo">Add <b>devices</b> — switches, patch panels, wall jacks — and generate their ports.</MudListItem>
+            <MudListItem Icon="@Icons.Material.Filled.Looks3">On a device, click <b>Connect</b> on a port to record a cable to another port.</MudListItem>
+            <MudListItem Icon="@Icons.Material.Filled.Looks4">Click <b>Trace</b> on any port to follow the circuit end to end, through patch panels.</MudListItem>
+        </MudList>
+        @if (!CanEdit)
+        {
+            <MudAlert Severity="Severity.Info" Class="mt-2">You have read-only access. An admin can give you the Editor role.</MudAlert>
+        }
+        else
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" Href="locations" Class="mt-2">Set up sites</MudButton>
+        }
+    </MudPaper>
+}
+
+<MudPaper Class="pa-4" Outlined="true">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-2">
+        <MudText Typo="Typo.h6">Recent changes</MudText>
+        <MudSpacer />
+        <MudButton Href="audit" Variant="Variant.Text" Size="Size.Small">View all</MudButton>
+    </MudStack>
+    @if (_recent.Count == 0)
+    {
+        <MudText Style="color: var(--mud-palette-text-secondary)">Nothing yet.</MudText>
+    }
+    else
+    {
+        <AuditTable Entries="_recent" Dense="true" />
+    }
+</MudPaper>
+
+@code {
+    private DashboardStats? _stats;
+    private List<AuditEntry> _recent = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        _stats = await Search.GetStatsAsync();
+        _recent = await AuditLog.GetAsync(max: 10);
+    }
+}

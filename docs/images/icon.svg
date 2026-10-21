@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Linktrace: two ports joined by a traced cable -->
+  <rect width="512" height="512" rx="112" fill="#0d47a1"/>
+  <rect x="64" y="88" width="384" height="104" rx="18" fill="#1565c0" stroke="#90caf9" stroke-width="6"/>
+  <rect x="64" y="320" width="384" height="104" rx="18" fill="#1565c0" stroke="#90caf9" stroke-width="6"/>
+  <g fill="#e3f2fd" opacity=".35">
+    <rect x="96" y="118" width="44" height="44" rx="8"/><rect x="156" y="118" width="44" height="44" rx="8"/>
+    <rect x="312" y="118" width="44" height="44" rx="8"/><rect x="372" y="118" width="44" height="44" rx="8"/>
+    <rect x="96" y="350" width="44" height="44" rx="8"/><rect x="216" y="350" width="44" height="44" rx="8"/>
+    <rect x="276" y="350" width="44" height="44" rx="8"/><rect x="372" y="350" width="44" height="44" rx="8"/>
+  </g>
+  <rect x="234" y="118" width="44" height="44" rx="8" fill="#66bb6a"/>
+  <rect x="156" y="350" width="44" height="44" rx="8" fill="#66bb6a"/>
+  <path d="M256 162 V230 Q256 256 230 256 H204 Q178 256 178 282 V350" fill="none" stroke="#ffb74d" stroke-width="16" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="256" cy="162" r="11" fill="#ffb74d"/>
+  <circle cx="178" cy="350" r="11" fill="#ffb74d"/>
+</svg>

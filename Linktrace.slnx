@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Linktrace/Linktrace.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Linktrace.Tests/Linktrace.Tests.csproj" />
+  </Folder>
+</Solution>

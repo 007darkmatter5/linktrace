@@ -1,0 +1,45 @@
+@inject SearchService Search
+@inject NavigationManager Nav
+
+<div style="width: min(420px, 50vw)" class="mr-2">
+    <MudAutocomplete T="SearchHit" @ref="_auto" SearchFunc="SearchAsync" ValueChanged="Go"
+                     ToStringFunc="@(h => h?.Title)" Placeholder="Search devices, ports, cable labels…"
+                     Variant="Variant.Outlined" Margin="Margin.Dense" Dense="true" DebounceInterval="250"
+                     AdornmentIcon="@Icons.Material.Filled.Search" Adornment="Adornment.Start"
+                     ResetValueOnEmptyText="true" MaxItems="30"
+                     Style="background: var(--mud-palette-surface); border-radius: 4px;">
+        <ItemTemplate Context="hit">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                <MudIcon Size="Size.Small" Icon="@HitIcon(hit.Kind)" />
+                <div>
+                    <MudText Typo="Typo.body2">@hit.Title</MudText>
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">@hit.Subtitle</MudText>
+                </div>
+            </MudStack>
+        </ItemTemplate>
+        <NoItemsTemplate>
+            <MudText Typo="Typo.body2" Class="pa-2">No matches.</MudText>
+        </NoItemsTemplate>
+    </MudAutocomplete>
+</div>
+
+@code {
+    private MudAutocomplete<SearchHit> _auto = default!;
+
+    private async Task<IEnumerable<SearchHit>> SearchAsync(string? text, CancellationToken ct)
+        => await Search.SearchAsync(text);
+
+    private static string HitIcon(SearchHitKind kind) => kind switch
+    {
+        SearchHitKind.Device => Icons.Material.Filled.Dns,
+        SearchHitKind.Cable => Icons.Material.Filled.Cable,
+        _ => Icons.Material.Filled.SettingsEthernet
+    };
+
+    private async Task Go(SearchHit? hit)
+    {
+        if (hit is null) return;
+        await _auto.ClearAsync();
+        Nav.NavigateTo(hit.Href);
+    }
+}

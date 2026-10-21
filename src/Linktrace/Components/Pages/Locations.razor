@@ -1,0 +1,148 @@
+@page "/locations"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject LocationService LocationSvc
+
+<PageTitle>Sites &amp; racks · Linktrace</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h4">Sites &amp; racks</MudText>
+    <MudSpacer />
+    @if (CanEdit)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddSite">Add site</MudButton>
+    }
+</MudStack>
+
+@if (_sites is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+    return;
+}
+
+@if (_sites.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">No sites yet. A site is a building or campus; rooms and racks go inside it.</MudAlert>
+}
+
+@foreach (var site in _sites)
+{
+    <MudCard Outlined="true" Class="mb-4">
+        <MudCardHeader>
+            <CardHeaderAvatar><MudIcon Icon="@Icons.Material.Filled.Business" Color="Color.Primary" /></CardHeaderAvatar>
+            <CardHeaderContent>
+                <MudText Typo="Typo.h6">@site.Name</MudText>
+                @if (site.Address is not null) { <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">@site.Address</MudText> }
+                @if (site.Notes is not null) { <MudText Typo="Typo.caption">@site.Notes</MudText> }
+            </CardHeaderContent>
+            <CardHeaderActions>
+                <MudButton Size="Size.Small" Href="@($"devices?siteId={site.Id}")" StartIcon="@Icons.Material.Filled.Dns">Devices</MudButton>
+                @if (CanEdit)
+                {
+                    <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.Add" OnClick="() => AddRoom(site)">Room</MudButton>
+                    <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Edit" OnClick="() => EditSite(site)" title="Edit site" />
+                    <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Delete" OnClick="() => DeleteSite(site)" title="Delete site" />
+                }
+            </CardHeaderActions>
+        </MudCardHeader>
+        <MudCardContent Class="pt-0">
+            @if (site.Rooms.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">No rooms yet.</MudText>
+            }
+            else
+            {
+                <MudSimpleTable Dense="true" Hover="true" Elevation="0">
+                    <thead>
+                        <tr><th>Room</th><th>Floor</th><th>Racks</th><th>Devices</th><th></th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var room in site.Rooms)
+                        {
+                            <tr>
+                                <td><b>@room.Name</b>@if (room.Notes is not null) { <br /><MudText Typo="Typo.caption">@room.Notes</MudText> }</td>
+                                <td>@room.Floor</td>
+                                <td>
+                                    @foreach (var rack in room.Racks)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.ViewColumn" Href="@($"racks/{rack.Id}")">
+                                            @rack.Name · @_byRack.GetValueOrDefault(rack.Id) dev
+                                        </MudChip>
+                                    }
+                                    @if (CanEdit)
+                                    {
+                                        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Add" OnClick="() => AddRack(room)">Rack</MudChip>
+                                    }
+                                </td>
+                                <td>
+                                    <MudLink Href="@($"devices?roomId={room.Id}")">@_byRoom.GetValueOrDefault(room.Id)</MudLink>
+                                </td>
+                                <td style="text-align: right; white-space: nowrap">
+                                    @if (CanEdit)
+                                    {
+                                        <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Edit" OnClick="() => EditRoom(room)" title="Edit room" />
+                                        <MudIconButton Size="Size.Small" Icon="@Icons.Material.Filled.Delete" OnClick="() => DeleteRoom(room)" title="Delete room" />
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </MudSimpleTable>
+            }
+        </MudCardContent>
+    </MudCard>
+}
+
+@code {
+    private List<Site>? _sites;
+    private Dictionary<int, int> _byRoom = [];
+    private Dictionary<int, int> _byRack = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await Load();
+    }
+
+    private async Task Load()
+    {
+        _sites = await LocationSvc.GetSitesAsync();
+        (_byRoom, _byRack) = await LocationSvc.GetDeviceCountsAsync();
+    }
+
+    private async Task AddSite() => await OpenSite("Add site", new Site());
+    private async Task EditSite(Site s) => await OpenSite("Edit site", s.EditCopy());
+
+    private async Task OpenSite(string title, Site model)
+    {
+        if (await Dialogs.OpenAsync<SiteDialog, Site>(title, new() { { d => d.Model, model } }) is not null)
+            await Load();
+    }
+
+    private async Task DeleteSite(Site s)
+    {
+        if (!await Dialogs.ConfirmAsync("Delete site", $"Delete site '{s.Name}'?")) return;
+        if (await Snackbar.RunAsync(() => LocationSvc.DeleteSiteAsync(s.Id), "Site deleted")) await Load();
+    }
+
+    private async Task AddRoom(Site s) => await OpenRoom("Add room", new Room { SiteId = s.Id });
+    private async Task EditRoom(Room r) => await OpenRoom("Edit room", r.EditCopy());
+
+    private async Task OpenRoom(string title, Room model)
+    {
+        if (await Dialogs.OpenAsync<RoomDialog, Room>(title, new() { { d => d.Model, model } }) is not null)
+            await Load();
+    }
+
+    private async Task DeleteRoom(Room r)
+    {
+        if (!await Dialogs.ConfirmAsync("Delete room", $"Delete room '{r.Name}'?")) return;
+        if (await Snackbar.RunAsync(() => LocationSvc.DeleteRoomAsync(r.Id), "Room deleted")) await Load();
+    }
+
+    private async Task AddRack(Room r)
+    {
+        if (await Dialogs.OpenAsync<RackDialog, Rack>("Add rack", new() { { d => d.Model, new Rack { RoomId = r.Id } } }) is not null)
+            await Load();
+    }
+}

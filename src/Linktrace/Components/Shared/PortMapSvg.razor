@@ -1,0 +1,110 @@
+@* Draws device faceplates and routed cables as SVG. All geometry comes from PortMapScene. *@
+@using static Linktrace.Components.Shared.PortMapScene
+
+<div style="overflow-x: auto; padding-bottom: 4px">
+    <svg width="@F(Scene.Width)" height="@F(Scene.Height)" viewBox="0 0 @F(Scene.Width) @F(Scene.Height)"
+         class="@($"lt-portmap {(HasSelection ? "has-selection" : "")}")" role="img">
+        @foreach (var placed in Scene.Devices)
+        {
+            var device = placed.Device;
+            <g class="lt-device-name" @onclick="() => OnDeviceClick.InvokeAsync(device)">
+                <title>@($"{device.Name} · {Display.Kind(device.Kind)}")</title>
+                <text x="0" y="@F(placed.Y + placed.Height / 2 - 2)" class="lt-device-title">@Truncate(device.Name, 20)</text>
+                <text x="0" y="@F(placed.Y + placed.Height / 2 + 13)" class="lt-device-kind">@Display.Kind(device.Kind)@(device.RackUnit is int u ? $" · U{u}" : "")</text>
+            </g>
+            <g transform="translate(@F(placed.X) @F(placed.Y))">
+                <rect x="0" y="0" width="@F(placed.Width)" height="@F(placed.Height)" rx="5" class="lt-device-body" />
+                @foreach (var block in placed.Plate.Blocks)
+                {
+                    <g>
+                        <text x="@F(block.X)" y="@F(block.Y + 11)" class="lt-block-title">@block.Title</text>
+                    </g>
+                }
+                @foreach (var label in placed.Plate.Labels)
+                {
+                    <g>
+                        <line x1="@F(label.X)" x2="@F(label.X + label.Width)" y1="@F(label.Y + FaceplateLayout.Cell - 3)" y2="@F(label.Y + FaceplateLayout.Cell - 3)" class="lt-grid-label-rule" />
+                        <text x="@F(label.X + label.Width / 2)" y="@F(label.Y + FaceplateLayout.Cell / 2 + 4)" text-anchor="middle" class="lt-grid-label">@label.Text</text>
+                    </g>
+                }
+                @foreach (var cell in placed.Plate.Cells)
+                {
+                    var port = cell.Port;
+                    <g class="lt-port-cell" @onclick="() => OnPortClick.InvokeAsync(port)">
+                        <title>@Tooltip(port)</title>
+                        <rect x="@F(cell.X)" y="@F(cell.Y)" width="@F(FaceplateLayout.Cell)" height="@F(FaceplateLayout.Cell)" rx="4" class="@PortClasses(port)" />
+                        <text x="@F(cell.CenterX)" y="@F(cell.Y + FaceplateLayout.Cell / 2 + 4)" text-anchor="middle"
+                              class="@(port.CableId != null ? "lt-port-label on" : "lt-port-label")">@cell.Label</text>
+                    </g>
+                }
+            </g>
+        }
+
+        @foreach (var line in Scene.Lines)
+        {
+            var selected = IsSelected(line);
+            <g class="@($"lt-link {(selected ? "selected" : "")}")" @onclick="() => OnLineClick.InvokeAsync(line)">
+                <title>@LineTooltip(line)</title>
+                <path d="@line.Path" class="lt-link-hit" />
+                <path d="@line.Path" class="lt-link-line" stroke="@line.Color" stroke-dasharray="@(line.Dashed ? "6 4" : null)" />
+                <circle cx="@F(line.A.X)" cy="@F(line.A.Y)" r="3" fill="@line.Color" />
+                @if (line.External is null)
+                {
+                    <circle cx="@F(line.B.X)" cy="@F(line.B.Y)" r="3" fill="@line.Color" />
+                }
+                else
+                {
+                    @* <text> must sit inside an element here, or Razor treats it as its own <text> tag. *@
+                    <g>
+                        <polygon points="@F(line.B.X) @F(line.B.Y - 4) @F(line.B.X + 6) @F(line.B.Y) @F(line.B.X) @F(line.B.Y + 4)" fill="@line.Color" />
+                        <text x="@F(line.LabelAt.X + 4)" y="@F(line.LabelAt.Y)" class="lt-external-label">@line.Label</text>
+                    </g>
+                }
+            </g>
+        }
+    </svg>
+</div>
+
+@code {
+    [Parameter, EditorRequired] public PortMapScene Scene { get; set; } = default!;
+    [Parameter] public int? SelectedPortId { get; set; }
+    [Parameter] public DrawnLink? SelectedLine { get; set; }
+    [Parameter] public EventCallback<Port> OnPortClick { get; set; }
+    [Parameter] public EventCallback<DrawnLink> OnLineClick { get; set; }
+    [Parameter] public EventCallback<Device> OnDeviceClick { get; set; }
+
+    private bool HasSelection => SelectedLine is not null;
+
+    private bool IsSelected(DrawnLink line) => SelectedLine is { } s
+        && ((s.Link is not null && s.Link == line.Link) || (s.External is not null && s.External == line.External));
+
+    private string PortClasses(Port p)
+    {
+        var c = "lt-port";
+        if (p.CableId != null) c += " connected";
+        if (p.Id == SelectedPortId || (SelectedLine is { } s && (s.Link?.PortAId == p.Id || s.Link?.PortBId == p.Id || s.External?.PortId == p.Id)))
+            c += " selected";
+        return c;
+    }
+
+    private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+
+    private static string Tooltip(Port p)
+    {
+        var text = Display.PortOnly(p);
+        if (p.Description is not null) text += $" — {p.Description}";
+        var far = p.Cable?.Ports.FirstOrDefault(x => x.Id != p.Id);
+        text += far is null ? "\nNot connected" : $"\n→ {Display.Port(far)}{(p.Cable?.Label is { } l ? $" ({l})" : "")}";
+        return text;
+    }
+
+    private string LineTooltip(DrawnLink line)
+    {
+        string End(int id) => Scene.FindPort(id) is { } p && Scene.DeviceOfPort(id) is { } d ? Display.Port(d.Device.Name, p.Name, p.Face) : "?";
+        if (line.External is { } e)
+            return $"{End(e.PortId)} {line.Label}" + (e.Cable?.Label is { } l ? $"\n{l}" : "");
+        var link = line.Link!;
+        var ends = $"{End(link.PortAId)} ↔ {End(link.PortBId)}";
+        return link.IsDirect ? $"{link.Cable?.Label ?? "Cable"}: {ends}" : $"Through patch panels ({link.CableCount} cables): {ends}";
+    }
+}

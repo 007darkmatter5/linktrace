@@ -1,0 +1,92 @@
+@inherits DialogBase
+@inject DeviceService Devices
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.subtitle2" Class="mb-1">Quick presets</MudText>
+        <MudStack Row="true" Wrap="Wrap.Wrap" Spacing="1" Class="mb-4">
+            <MudChip T="string" OnClick="@(() => Preset("", 24, MediaType.RJ45, true))">24-port patch panel</MudChip>
+            <MudChip T="string" OnClick="@(() => Preset("", 48, MediaType.RJ45, true))">48-port patch panel</MudChip>
+            <MudChip T="string" OnClick="@(() => Preset("", 12, MediaType.LC, true, MediaType.LC))">12-port LC fiber panel</MudChip>
+            <MudChip T="string" OnClick="@(() => Preset("Gi1/0/", 24, MediaType.RJ45, false))">24× Gi1/0/x</MudChip>
+            <MudChip T="string" OnClick="@(() => Preset("Gi1/0/", 48, MediaType.RJ45, false))">48× Gi1/0/x</MudChip>
+            <MudChip T="string" OnClick="@(() => Preset("Te1/1/", 4, MediaType.SFPPlus, false))">4× Te1/1/x SFP+</MudChip>
+            <MudChip T="string" OnClick="@(() => Preset("eth", 1, MediaType.RJ45, false, start: 0))">eth0</MudChip>
+            <MudChip T="string" OnClick="@(() => Preset("", 1, MediaType.Keystone, true))">Wall jack (1 port)</MudChip>
+        </MudStack>
+
+        <MudForm @ref="Form">
+            <MudGrid Spacing="2">
+                <MudItem xs="12" sm="4">
+                    <MudTextField @bind-Value="Request.Prefix" Label="Name prefix" Placeholder="e.g. Gi1/0/" Immediate="true" />
+                </MudItem>
+                <MudItem xs="6" sm="4">
+                    <MudNumericField @bind-Value="Request.Start" Label="Start number" Min="0" Immediate="true" />
+                </MudItem>
+                <MudItem xs="6" sm="4">
+                    <MudNumericField @bind-Value="Request.Count" Label="How many" Min="1" Max="1000" Immediate="true" />
+                </MudItem>
+                <MudItem xs="12" sm="6">
+                    <MudSelect T="MediaType" @bind-Value="Request.MediaType" Label="@(Request.FrontAndRearPairs ? "Front connector" : "Connector")">
+                        @foreach (var m in Enum.GetValues<MediaType>())
+                        {
+                            <MudSelectItem Value="m">@Display.Media(m)</MudSelectItem>
+                        }
+                    </MudSelect>
+                </MudItem>
+                @if (Request.FrontAndRearPairs)
+                {
+                    <MudItem xs="12" sm="6">
+                        <MudSelect T="MediaType" @bind-Value="Request.RearMediaType" Label="Rear connector">
+                            @foreach (var m in Enum.GetValues<MediaType>())
+                            {
+                                <MudSelectItem Value="m">@Display.Media(m)</MudSelectItem>
+                            }
+                        </MudSelect>
+                    </MudItem>
+                }
+                <MudItem xs="12">
+                    <MudSwitch @bind-Value="Request.FrontAndRearPairs" Color="Color.Primary"
+                               Label="Front + rear pairs (patch panel / wall jack pass-through)" />
+                </MudItem>
+            </MudGrid>
+        </MudForm>
+
+        <MudAlert Severity="Severity.Normal" Dense="true" Class="mt-2">@Preview</MudAlert>
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" SaveText="Add ports" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter] public int DeviceId { get; set; }
+    [Parameter] public PortGenerationRequest Request { get; set; } = new();
+
+    private string Preview
+    {
+        get
+        {
+            if (Request.Count < 1) return "Nothing to create.";
+            var first = $"{Request.Prefix}{Request.Start}";
+            var last = $"{Request.Prefix}{Request.Start + Request.Count - 1}";
+            var range = Request.Count == 1 ? first : $"{first} … {last}";
+            return Request.FrontAndRearPairs
+                ? $"Creates {Request.Count * 2} ports: {range} on the front and on the rear, each front linked to its rear."
+                : $"Creates {Request.Count} port(s): {range}.";
+        }
+    }
+
+    private void Preset(string prefix, int count, MediaType media, bool pairs, MediaType rear = MediaType.PunchDown, int start = 1)
+    {
+        Request.Prefix = prefix;
+        Request.Count = count;
+        Request.Start = start;
+        Request.MediaType = media;
+        Request.FrontAndRearPairs = pairs;
+        Request.RearMediaType = rear;
+    }
+
+    private Task Save() => SubmitAsync(() => Devices.AddPortsAsync(DeviceId, Request));
+}

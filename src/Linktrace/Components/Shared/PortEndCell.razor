@@ -1,0 +1,45 @@
+@* Shows what a port is plugged into, with connect / disconnect / trace actions. *@
+@if (FarEnd is { } far)
+{
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1" Wrap="Wrap.Wrap">
+        <MudLink Href="@($"devices/{far.DeviceId}")" Typo="Typo.body2"><b>@far.Device?.Name</b> › @Display.PortOnly(far)</MudLink>
+        <MudChip T="string" Size="Size.Small" Variant="Variant.Outlined" Icon="@Icons.Material.Filled.Cable"
+                 OnClick="() => OnEditCable.InvokeAsync(Port)" title="@CableTitle">
+            @(Port.Cable?.Label ?? "cable")
+        </MudChip>
+        <MudIconButton Icon="@Icons.Material.Filled.Route" Size="Size.Small" Color="Color.Primary" Href="@($"trace/{Port.Id}")" title="Trace" />
+        @if (CanEdit)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.LinkOff" Size="Size.Small" OnClick="() => OnDisconnect.InvokeAsync(Port)" title="Disconnect" />
+        }
+    </MudStack>
+}
+else
+{
+    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">Not connected</MudText>
+        @if (Port.PairedPortId is not null)
+        {
+            <MudIconButton Icon="@Icons.Material.Filled.Route" Size="Size.Small" Href="@($"trace/{Port.Id}")" title="Trace" />
+        }
+        @if (CanEdit)
+        {
+            <MudButton Size="Size.Small" Variant="Variant.Text" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Link"
+                       OnClick="() => OnConnect.InvokeAsync(Port)">Connect</MudButton>
+        }
+    </MudStack>
+}
+
+@code {
+    [Parameter, EditorRequired] public Port Port { get; set; } = default!;
+    [Parameter] public bool CanEdit { get; set; }
+    [Parameter] public EventCallback<Port> OnConnect { get; set; }
+    [Parameter] public EventCallback<Port> OnDisconnect { get; set; }
+    [Parameter] public EventCallback<Port> OnEditCable { get; set; }
+
+    private Port? FarEnd => Port.Cable?.Ports.FirstOrDefault(p => p.Id != Port.Id);
+
+    private string CableTitle => Port.Cable is { } c
+        ? string.Join(" · ", new[] { Display.CableKind(c.CableType), c.Color, c.LengthMeters is { } m ? $"{m:0.##} m" : null }.Where(x => x != null))
+        : "";
+}

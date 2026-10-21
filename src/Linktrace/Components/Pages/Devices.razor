@@ -1,0 +1,154 @@
+@page "/devices"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject DeviceService DeviceSvc
+@inject LocationService Locations
+
+<PageTitle>Devices · Linktrace</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Class="mb-4">
+    <MudText Typo="Typo.h4">Devices</MudText>
+    <MudSpacer />
+    @if (CanEdit)
+    {
+        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Add" OnClick="AddDevice">Add device</MudButton>
+    }
+</MudStack>
+
+<MudPaper Outlined="true" Class="pa-3 mb-3">
+    <MudGrid Spacing="2">
+        <MudItem xs="12" md="4">
+            <MudTextField T="string" Value="_filter.Text" ValueChanged="TextChanged" Label="Search" Immediate="true" DebounceInterval="300"
+                          Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true"
+                          HelperText="Name, model, serial, IP" />
+        </MudItem>
+        <MudItem xs="12" sm="6" md="2">
+            <MudSelect T="DeviceKind?" Value="_filter.Kind" ValueChanged="KindChanged" Label="Type" Clearable="true">
+                @foreach (var k in Enum.GetValues<DeviceKind>())
+                {
+                    <MudSelectItem T="DeviceKind?" Value="k">@Display.Kind(k)</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudSelect T="int?" Value="_filter.SiteId" ValueChanged="SiteChanged" Label="Site" Clearable="true">
+                @foreach (var s in _rooms.Select(r => r.Site).DistinctBy(s => s.Id))
+                {
+                    <MudSelectItem T="int?" Value="s.Id">@s.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+        <MudItem xs="12" sm="6" md="3">
+            <MudSelect T="int?" Value="_filter.RoomId" ValueChanged="RoomChanged" Label="Room" Clearable="true">
+                @foreach (var r in _rooms.Where(r => _filter.SiteId is null || r.SiteId == _filter.SiteId))
+                {
+                    <MudSelectItem T="int?" Value="r.Id">@r.Site.Name / @r.Name</MudSelectItem>
+                }
+            </MudSelect>
+        </MudItem>
+    </MudGrid>
+    @if (_filter.RackId is int rackId)
+    {
+        <MudChip T="string" Class="mt-2" OnClose="ClearRack" Color="Color.Primary" Variant="Variant.Outlined">
+            Rack: @(_rooms.SelectMany(r => r.Racks).FirstOrDefault(k => k.Id == rackId)?.Name ?? rackId.ToString())
+        </MudChip>
+    }
+</MudPaper>
+
+<MudDataGrid T="DeviceListItem" Items="_devices" Loading="_loading" Dense="true" Hover="true" Outlined="true"
+             RowClick="@(e => Nav.NavigateTo($"devices/{e.Item.Id}"))" RowClass="lt-clickable"
+             RowsPerPage="50" SortMode="SortMode.Single">
+    <Columns>
+        <TemplateColumn Title="Name" SortBy="@(d => d.Name)">
+            <CellTemplate>
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@Display.KindIcon(context.Item.Kind)" Size="Size.Small" Color="Color.Primary" />
+                    <b>@context.Item.Name</b>
+                </MudStack>
+            </CellTemplate>
+        </TemplateColumn>
+        <PropertyColumn Property="d => Display.Kind(d.Kind)" Title="Type" />
+        <PropertyColumn Property="@(d => string.Join(" ", new[] { d.Manufacturer, d.Model }.Where(x => x != null)))" Title="Model" />
+        <TemplateColumn Title="Location" SortBy="@(d => d.SiteName + d.RoomName + d.RackName + d.RackUnit)">
+            <CellTemplate>
+                @context.Item.SiteName / @context.Item.RoomName
+                @if (context.Item.RackName is not null)
+                {
+                    <span> / @context.Item.RackName@(context.Item.RackUnit is int u ? $" U{u}" : "")</span>
+                }
+            </CellTemplate>
+        </TemplateColumn>
+        <TemplateColumn Title="Ports used" SortBy="@(d => d.ConnectedCount)">
+            <CellTemplate>
+                @if (context.Item.PortCount == 0)
+                {
+                    <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">no ports</MudText>
+                }
+                else
+                {
+                    <span>@context.Item.ConnectedCount / @context.Item.PortCount</span>
+                }
+            </CellTemplate>
+        </TemplateColumn>
+        <PropertyColumn Property="d => d.ManagementAddress" Title="Mgmt" CellClass="lt-mono" />
+    </Columns>
+    <NoRecordsContent>
+        <MudText>No devices match.</MudText>
+    </NoRecordsContent>
+    <PagerContent>
+        <MudDataGridPager T="DeviceListItem" />
+    </PagerContent>
+</MudDataGrid>
+
+@code {
+    [SupplyParameterFromQuery] public int? SiteId { get; set; }
+    [SupplyParameterFromQuery] public int? RoomId { get; set; }
+    [SupplyParameterFromQuery] public int? RackId { get; set; }
+
+    private readonly DeviceFilter _filter = new();
+    private List<DeviceListItem> _devices = [];
+    private List<Room> _rooms = [];
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        _rooms = await Locations.GetRoomsAsync();
+    }
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _filter.SiteId = SiteId;
+        _filter.RoomId = RoomId;
+        _filter.RackId = RackId;
+        await Load();
+    }
+
+    private async Task Load()
+    {
+        _loading = true;
+        _devices = await DeviceSvc.SearchAsync(_filter);
+        _loading = false;
+    }
+
+    private async Task TextChanged(string? text) { _filter.Text = text; await Load(); }
+    private async Task KindChanged(DeviceKind? kind) { _filter.Kind = kind; await Load(); }
+
+    private async Task SiteChanged(int? siteId)
+    {
+        _filter.SiteId = siteId;
+        if (siteId is not null && _rooms.FirstOrDefault(r => r.Id == _filter.RoomId)?.SiteId != siteId) _filter.RoomId = null;
+        _filter.RackId = null;
+        await Load();
+    }
+
+    private async Task RoomChanged(int? roomId) { _filter.RoomId = roomId; _filter.RackId = null; await Load(); }
+    private async Task ClearRack() { _filter.RackId = null; await Load(); }
+
+    private async Task AddDevice()
+    {
+        var model = new Device { RoomId = _filter.RoomId ?? 0, RackId = _filter.RackId };
+        if (await Dialogs.OpenAsync<DeviceDialog, Device>("Add device", new() { { d => d.Model, model } }, MaxWidth.Medium) is { } created)
+            Nav.NavigateTo($"devices/{created.Id}");
+    }
+}

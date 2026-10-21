@@ -1,0 +1,403 @@
+@page "/devices/{Id:int}"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject DeviceService DeviceSvc
+@inject CableService CableSvc
+@inject PortMapService PortMap
+
+<PageTitle>@(_device?.Name ?? "Device") · Linktrace</PageTitle>
+
+@if (_loading && _device is null)
+{
+    <MudProgressLinear Indeterminate="true" />
+    return;
+}
+@if (_device is null)
+{
+    <MudAlert Severity="Severity.Warning">Device not found. It may have been deleted.</MudAlert>
+    return;
+}
+
+<MudBreadcrumbs Items="_crumbs" Class="px-0" />
+
+<MudPaper Outlined="true" Class="pa-4 mb-4">
+    <MudStack Row="true" AlignItems="AlignItems.Start" Spacing="3">
+        <MudAvatar Color="Color.Primary" Size="Size.Large"><MudIcon Icon="@Display.KindIcon(_device.Kind)" /></MudAvatar>
+        <div style="flex: 1">
+            <MudText Typo="Typo.h4">@_device.Name</MudText>
+            <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">
+                @Display.Kind(_device.Kind) · @Display.Location(_device)
+            </MudText>
+            <MudGrid Spacing="2" Class="mt-2">
+                <InfoItem Label="Manufacturer / model" Value="@string.Join(" ", new[] { _device.Manufacturer, _device.Model }.Where(x => x != null))" />
+                <InfoItem Label="Serial" Value="@_device.SerialNumber" />
+                <InfoItem Label="Management" Value="@_device.ManagementAddress" />
+                <InfoItem Label="Last changed" Value="@($"{_device.UpdatedUtc.ToLocalTime():yyyy-MM-dd HH:mm} by {_device.UpdatedBy}")" />
+            </MudGrid>
+            @if (_device.Notes is not null)
+            {
+                <MudText Typo="Typo.body2" Class="mt-3" Style="white-space: pre-line">@_device.Notes</MudText>
+            }
+        </div>
+        @if (CanEdit)
+        {
+            <MudStack Row="true">
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditDevice">Edit</MudButton>
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="DuplicateDevice">Duplicate</MudButton>
+                <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteDevice" title="Delete device" />
+            </MudStack>
+        }
+    </MudStack>
+</MudPaper>
+
+@if (_device.Ports.Count > 0)
+{
+    <MudPaper Outlined="true" Class="pa-4 mb-4">
+        <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+            <MudText Typo="Typo.h6">Faceplate</MudText>
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                <span class="lt-legend-swatch" style="background: var(--mud-palette-success)"></span>connected
+                <span class="lt-legend-swatch ml-3" style="background: var(--mud-palette-surface)"></span>free
+            </MudText>
+            <MudSpacer />
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                @(_device.FaceplateTemplate is { } fpt ? $"Layout: {fpt.Name}" : "Automatic layout")
+            </MudText>
+            @if (CanEdit)
+            {
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.GridOn" Href="@($"devices/{_device.Id}/faceplate")">Edit layout</MudButton>
+            }
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.AccountTree"
+                       Href="@($"portmap?d={string.Join(",", _neighbors.Select(n => n.DeviceId).Prepend(_device.Id))}")"
+                       title="This device and everything cabled to it">
+                Port map
+            </MudButton>
+        </MudStack>
+
+        <PortMapSvg Scene="_scene!" SelectedPortId="_selected?.Id" OnPortClick="SelectPort" />
+
+        @if (_selected is { } sel)
+        {
+            <MudPaper Elevation="0" Class="pa-3 mt-2" Style="background: var(--mud-palette-background-gray)">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="3">
+                    <div>
+                        <MudText Typo="Typo.subtitle1"><b>@Display.PortOnly(sel)</b> · @Display.Media(sel.MediaType)</MudText>
+                        @if (sel.Description is not null) { <MudText Typo="Typo.body2">@sel.Description</MudText> }
+                        @if (Partner(sel) is { } partner) { <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">passes through to @Display.PortOnly(partner)</MudText> }
+                    </div>
+                    <MudSpacer />
+                    <PortEndCell Port="sel" CanEdit="CanEdit" OnConnect="Connect" OnDisconnect="Disconnect" OnEditCable="EditCable" />
+                    @if (CanEdit)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="() => EditPort(sel)" title="Edit port" />
+                    }
+                    <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="() => _selected = null" title="Close" />
+                </MudStack>
+            </MudPaper>
+        }
+
+        @if (_neighbors.Count > 0)
+        {
+            <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="1" Class="mt-3">
+                <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mr-1">Cabled to:</MudText>
+                @foreach (var n in _neighbors)
+                {
+                    <MudChip T="string" Size="Size.Small" Icon="@Display.KindIcon(n.Kind)" Href="@($"portmap?d={_device.Id},{n.DeviceId}")"
+                             title="Show the lines between these two devices">
+                        @n.Name · @n.CableCount
+                    </MudChip>
+                }
+            </MudStack>
+        }
+    </MudPaper>
+}
+
+<MudPaper Outlined="true" Class="pa-4">
+    <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+        <MudText Typo="Typo.h6">Ports</MudText>
+        <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">@_device.Ports.Count(p => p.CableId != null) of @_device.Ports.Count connected</MudText>
+        <MudSpacer />
+        <MudTextField @bind-Value="_search" Placeholder="Filter ports" Immediate="true" Margin="Margin.Dense" Variant="Variant.Outlined"
+                      Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.FilterList" Clearable="true" Style="max-width: 240px" />
+        @if (HasPairs)
+        {
+            <MudSwitch @bind-Value="_pairView" Color="Color.Primary" Label="Front/rear side by side" />
+        }
+        @if (CanEdit)
+        {
+            <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.PlaylistAdd" OnClick="AddPorts">Add ports</MudButton>
+            <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Add" OnClick="AddPort">One port</MudButton>
+        }
+    </MudStack>
+
+    @if (_device.Ports.Count == 0)
+    {
+        <MudAlert Severity="Severity.Info">
+            This device has no ports yet. @(CanEdit ? "Use “Add ports” to generate them, e.g. 48 switch ports or a 24-port patch panel." : "")
+        </MudAlert>
+    }
+    else if (_pairView && HasPairs)
+    {
+        <MudTable Items="PairRows" Dense="true" Hover="true" Elevation="0" Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh>Port</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh>Front side connects to</MudTh>
+                <MudTh>Rear side connects to</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Port"><b>@context.Main.Name</b></MudTd>
+                <MudTd DataLabel="Description">@(context.Main.Description ?? context.Rear?.Description)</MudTd>
+                <MudTd DataLabel="Front">
+                    <PortEndCell Port="context.Main" CanEdit="CanEdit" OnConnect="Connect" OnDisconnect="Disconnect" OnEditCable="EditCable" />
+                </MudTd>
+                <MudTd DataLabel="Rear">
+                    @if (context.Rear is { } rear)
+                    {
+                        <PortEndCell Port="rear" CanEdit="CanEdit" OnConnect="Connect" OnDisconnect="Disconnect" OnEditCable="EditCable" />
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">(@Display.PortOnly(context.Main), no rear pair)</MudText>
+                    }
+                </MudTd>
+                <MudTd Style="text-align: right">
+                    @if (CanEdit)
+                    {
+                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true">
+                            <MudMenuItem OnClick="() => EditPort(context.Main)">Edit @Display.PortOnly(context.Main)</MudMenuItem>
+                            @if (context.Rear is { } r)
+                            {
+                                <MudMenuItem OnClick="() => EditPort(r)">Edit @Display.PortOnly(r)</MudMenuItem>
+                            }
+                            <MudMenuItem OnClick="() => DeletePorts(context.Rear is null ? [context.Main] : [context.Main, context.Rear])">Delete</MudMenuItem>
+                        </MudMenu>
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+    else
+    {
+        <MudTable Items="FilteredPorts" Dense="true" Hover="true" Elevation="0" Breakpoint="Breakpoint.Sm">
+            <HeaderContent>
+                <MudTh>Port</MudTh>
+                <MudTh>Connector</MudTh>
+                <MudTh>Description</MudTh>
+                <MudTh>Connects to</MudTh>
+                <MudTh>Passes through to</MudTh>
+                <MudTh></MudTh>
+            </HeaderContent>
+            <RowTemplate>
+                <MudTd DataLabel="Port">
+                    <b>@context.Name</b>
+                    @if (context.Face != PortFace.Standard)
+                    {
+                        <MudChip T="string" Size="Size.Small" Variant="Variant.Text" Color="@(context.Face == PortFace.Front ? Color.Info : Color.Default)">@Display.Face(context.Face)</MudChip>
+                    }
+                </MudTd>
+                <MudTd DataLabel="Connector">@Display.Media(context.MediaType)</MudTd>
+                <MudTd DataLabel="Description">@context.Description</MudTd>
+                <MudTd DataLabel="Connects to">
+                    <PortEndCell Port="context" CanEdit="CanEdit" OnConnect="Connect" OnDisconnect="Disconnect" OnEditCable="EditCable" />
+                </MudTd>
+                <MudTd DataLabel="Passes through">
+                    @if (Partner(context) is { } partner)
+                    {
+                        <span>↔ @Display.PortOnly(partner)</span>
+                    }
+                </MudTd>
+                <MudTd Style="text-align: right; white-space: nowrap">
+                    @if (CanEdit)
+                    {
+                        <MudIconButton Icon="@Icons.Material.Filled.Edit" Size="Size.Small" OnClick="() => EditPort(context)" title="Edit port" />
+                        <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" OnClick="() => DeletePorts([context])" title="Delete port" />
+                    }
+                </MudTd>
+            </RowTemplate>
+        </MudTable>
+    }
+</MudPaper>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private Device? _device;
+    private bool _loading = true;
+    private string? _search;
+    private bool _pairView = true;
+    private List<BreadcrumbItem> _crumbs = [];
+    private PortMapScene? _scene;
+    private Port? _selected;
+    private List<Neighbor> _neighbors = [];
+
+    private void SelectPort(Port p) => _selected = _selected?.Id == p.Id ? null : p;
+
+    private record PairRow(Port Main, Port? Rear);
+
+    private bool HasPairs => _device?.Ports.Any(p => p.Face == PortFace.Front && p.PairedPortId != null) == true;
+
+    private Port? Partner(Port p) => p.PairedPortId is int id ? _device?.Ports.FirstOrDefault(x => x.Id == id) : null;
+
+    private bool Matches(Port p)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        var far = p.Cable?.Ports.FirstOrDefault(x => x.Id != p.Id);
+        return new[] { p.Name, p.Description, p.Cable?.Label, far?.Name, far?.Device?.Name }
+            .Any(s => s?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true);
+    }
+
+    private IEnumerable<Port> FilteredPorts => _device!.Ports.Where(Matches);
+
+    /// <summary>One row per front port with its rear partner; any other port gets its own row.</summary>
+    private IEnumerable<PairRow> PairRows
+    {
+        get
+        {
+            var rearsInPairs = _device!.Ports
+                .Where(p => p.Face == PortFace.Front && p.PairedPortId != null)
+                .Select(p => p.PairedPortId!.Value).ToHashSet();
+            foreach (var p in _device.Ports)
+            {
+                if (rearsInPairs.Contains(p.Id)) continue;
+                var rear = p.Face == PortFace.Front ? Partner(p) : null;
+                if (Matches(p) || (rear is not null && Matches(rear)))
+                    yield return new PairRow(p, rear);
+            }
+        }
+    }
+
+    protected override async Task OnParametersSetAsync() => await Load();
+
+    private async Task Load()
+    {
+        _loading = true;
+        _device = await DeviceSvc.GetAsync(Id);
+        _loading = false;
+        if (_device is not null)
+        {
+            _crumbs = [new("Devices", "devices"), new(_device.Room.Site.Name, $"devices?siteId={_device.Room.SiteId}"),
+                       new(_device.Room.Name, $"devices?roomId={_device.RoomId}")];
+            if (_device.Rack is not null) _crumbs.Add(new(_device.Rack.Name, $"racks/{_device.RackId}"));
+            _crumbs.Add(new(_device.Name, null, disabled: true));
+
+            _scene = PortMapScene.Single(_device);
+            _neighbors = await PortMap.GetNeighborsAsync(_device.Id);
+            // Keep the same port selected after a reload, using the fresh copy.
+            _selected = _selected is null ? null : _device.Ports.FirstOrDefault(p => p.Id == _selected.Id);
+        }
+    }
+
+    private async Task EditDevice()
+    {
+        var copy = _device!.EditCopy();
+        copy.Ports = [];
+        copy.FaceplateTemplate = null;
+        if (await Dialogs.OpenAsync<DeviceDialog, Device>("Edit device", new() { { d => d.Model, copy } }, MaxWidth.Medium) is not null)
+            await Load();
+    }
+
+    private async Task DuplicateDevice()
+    {
+        var created = await Dialogs.OpenAsync<DuplicateDialog, List<Device>>("Duplicate device",
+            new() { { d => d.Source, _device! } }, MaxWidth.Small);
+        if (created is not { Count: > 0 }) return;
+
+        if (created.Count == 1)
+        {
+            Snackbar.Add($"Created '{created[0].Name}'", Severity.Success);
+            Nav.NavigateTo($"devices/{created[0].Id}");
+        }
+        else
+        {
+            Snackbar.Add($"Created {created.Count} devices: {created[0].Name} … {created[^1].Name}", Severity.Success);
+            Nav.NavigateTo($"devices?roomId={created[0].RoomId}");
+        }
+    }
+
+    private async Task DeleteDevice()
+    {
+        var cables = _device!.Ports.Count(p => p.CableId != null);
+        var msg = $"Delete '{_device.Name}' and its {_device.Ports.Count} port(s)?"
+            + (cables > 0 ? $" {cables} cable(s) will be disconnected." : "");
+        if (!await Dialogs.ConfirmAsync("Delete device", msg)) return;
+        if (await Snackbar.RunAsync(() => DeviceSvc.DeleteAsync(_device.Id), "Device deleted"))
+            Nav.NavigateTo("devices");
+    }
+
+    private async Task AddPorts()
+    {
+        var request = new PortGenerationRequest();
+        if (_device!.Kind is DeviceKind.PatchPanel) { request.FrontAndRearPairs = true; }
+        else if (_device.Kind is DeviceKind.WallJack) { request.FrontAndRearPairs = true; request.Count = 1; request.MediaType = MediaType.Keystone; }
+        else if (_device.Kind is DeviceKind.Workstation or DeviceKind.Printer or DeviceKind.Phone or DeviceKind.Camera or DeviceKind.AccessPoint)
+        { request.Prefix = "eth"; request.Start = 0; request.Count = 1; }
+
+        var created = await Dialogs.OpenAsync<AddPortsDialog, int>("Add ports",
+            new() { { d => d.DeviceId, _device.Id }, { d => d.Request, request } });
+        if (created > 0)
+        {
+            Snackbar.Add($"Added {created} port(s)", Severity.Success);
+            await Load();
+        }
+    }
+
+    private async Task AddPort()
+    {
+        var model = new Port { DeviceId = _device!.Id };
+        await OpenPortDialog("Add port", model);
+    }
+
+    private Task EditPort(Port p)
+    {
+        var copy = p.EditCopy();
+        copy.Cable = null;
+        return OpenPortDialog($"Edit port {Display.PortOnly(p)}", copy);
+    }
+
+    private async Task OpenPortDialog(string title, Port model)
+    {
+        if (await Dialogs.OpenAsync<PortDialog, Port>(title,
+                new() { { d => d.Model, model }, { d => d.DevicePorts, _device!.Ports } }) is not null)
+            await Load();
+    }
+
+    private async Task DeletePorts(Port[] ports)
+    {
+        var connected = ports.Count(p => p.CableId != null);
+        var names = string.Join(", ", ports.Select(Display.PortOnly));
+        var msg = $"Delete {names}?" + (connected > 0 ? $" {connected} cable(s) will be disconnected." : "");
+        if (!await Dialogs.ConfirmAsync("Delete port", msg)) return;
+        if (await Snackbar.RunAsync(() => DeviceSvc.DeletePortsAsync(ports.Select(p => p.Id)), "Deleted")) await Load();
+    }
+
+    private async Task Connect(Port p)
+    {
+        var cable = await Dialogs.OpenAsync<ConnectDialog, Cable>("Connect cable",
+            new() { { d => d.FromPort, p }, { d => d.FromDeviceName, _device!.Name } }, MaxWidth.Medium);
+        if (cable is not null)
+        {
+            Snackbar.Add($"Connected{(cable.Label is null ? "" : $" with {cable.Label}")}", Severity.Success);
+            await Load();
+        }
+    }
+
+    private async Task Disconnect(Port p)
+    {
+        if (p.Cable is null) return;
+        var far = p.Cable.Ports.FirstOrDefault(x => x.Id != p.Id);
+        var msg = $"Remove cable {p.Cable.Label} between {Display.PortOnly(p)} and {(far is null ? "?" : Display.Port(far))}?";
+        if (!await Dialogs.ConfirmAsync("Disconnect", msg, "Disconnect")) return;
+        if (await Snackbar.RunAsync(() => CableSvc.DisconnectAsync(p.Cable.Id), "Disconnected")) await Load();
+    }
+
+    private async Task EditCable(Port p)
+    {
+        if (p.Cable is null || !CanEdit) return;
+        var copy = p.Cable.EditCopy();
+        copy.Ports = [];
+        if (await Dialogs.OpenAsync<CableDialog, Cable>($"Cable {p.Cable.Label}", new() { { d => d.Model, copy } }) is not null)
+            await Load();
+    }
+}

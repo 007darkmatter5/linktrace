@@ -1,0 +1,67 @@
+.lt-mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+.lt-clickable { cursor: pointer; }
+
+/* Trace view: vertical chain of port cards joined by cable / pass-through connectors */
+.lt-trace-connector { display: flex; align-items: center; gap: 12px; margin-left: 28px; padding: 6px 0 6px 24px; min-height: 52px; }
+.lt-trace-connector.cable { border-left: 4px solid var(--mud-palette-primary); }
+.lt-trace-connector.passthrough { border-left: 4px dashed var(--mud-palette-text-disabled); }
+.lt-trace-start { outline: 2px solid var(--mud-palette-secondary); }
+
+/* Rack elevation */
+.lt-rack { border: 2px solid var(--mud-palette-lines-default); border-radius: 4px; max-width: 640px; }
+.lt-rack-slot { height: 30px; border-bottom: 1px solid var(--mud-palette-lines-default); display: flex; align-items: stretch; }
+.lt-rack-unit { width: 44px; flex: none; font-size: .75rem; color: var(--mud-palette-text-secondary); display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--mud-palette-lines-default); }
+.lt-rack-device { flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--mud-palette-primary); color: var(--mud-palette-primary-text); border-radius: 4px; margin: 2px; overflow: hidden; cursor: pointer; }
+.lt-rack-device:hover { filter: brightness(1.1); }
+
+/* Faceplate / port map (SVG) */
+.lt-portmap { display: block; font-family: Roboto, sans-serif; }
+.lt-device-title { font-size: 14px; font-weight: 600; fill: var(--mud-palette-text-primary); }
+.lt-device-kind { font-size: 11px; fill: var(--mud-palette-text-secondary); }
+.lt-device-name { cursor: pointer; }
+.lt-device-name:hover .lt-device-title { fill: var(--mud-palette-primary); text-decoration: underline; }
+.lt-grid-label { font-size: 11px; font-weight: 600; fill: var(--mud-palette-text-secondary); letter-spacing: .03em; }
+.lt-grid-label-rule { stroke: var(--mud-palette-lines-inputs); stroke-width: 1; }
+
+/* Faceplate editor (HTML grid, cells snap) */
+.lt-fp-grid { display: grid; gap: 5px; padding: 12px; background: var(--mud-palette-background-gray); border: 1.5px solid var(--mud-palette-lines-default); border-radius: 6px; width: max-content; user-select: none; }
+.lt-fp-cell { width: 34px; height: 34px; border: 1px dashed var(--mud-palette-lines-inputs); border-radius: 4px; cursor: pointer; }
+.lt-fp-cell:hover, .lt-fp-cell.drop { background: var(--mud-palette-primary-hover); border-style: solid; border-color: var(--mud-palette-primary); }
+.lt-fp-cell.selected { border: 2px solid var(--mud-palette-secondary); }
+.lt-fp-port { width: 34px; height: 34px; border-radius: 4px; display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 600; cursor: grab;
+              background: var(--mud-palette-primary); color: var(--mud-palette-primary-text); z-index: 1; overflow: hidden; }
+.lt-fp-port.rear { background: var(--mud-palette-info-darken); }
+.lt-fp-port.selected { outline: 3px solid var(--mud-palette-secondary); outline-offset: 1px; }
+.lt-fp-label { height: 34px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 600; z-index: 1; cursor: grab;
+               color: var(--mud-palette-text-secondary); border-bottom: 1px solid var(--mud-palette-lines-inputs); background: var(--mud-palette-surface); border-radius: 4px 4px 0 0; overflow: hidden; white-space: nowrap; }
+.lt-fp-label.selected { outline: 3px solid var(--mud-palette-secondary); }
+.lt-fp-chip { display: inline-flex; align-items: center; justify-content: center; min-width: 34px; height: 28px; padding: 0 6px; margin: 2px; border-radius: 4px;
+              font-size: 11px; font-weight: 600; cursor: grab; background: var(--mud-palette-primary); color: var(--mud-palette-primary-text); }
+.lt-fp-chip.rear { background: var(--mud-palette-info-darken); }
+.lt-fp-chip.selected { outline: 3px solid var(--mud-palette-secondary); outline-offset: 1px; }
+/* Port map device stack (reorderable list) */
+.lt-stack-row { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 2px; margin-bottom: 4px; border-radius: 6px; cursor: grab;
+                border: 1px solid var(--mud-palette-lines-default); background: var(--mud-palette-surface); }
+.lt-stack-row:hover { border-color: var(--mud-palette-primary); }
+.lt-stack-row.drop { border: 2px dashed var(--mud-palette-primary); background: var(--mud-palette-primary-hover); }
+.lt-stack-handle { color: var(--mud-palette-text-disabled); }
+.lt-stack-name { font-weight: 600; font-size: .875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lt-stack-sub { font-size: .75rem; color: var(--mud-palette-text-secondary); }
+.lt-external-label { font-size: 11px; fill: var(--mud-palette-text-secondary); }
+/* Hovering or selecting a cable fades the others so it's easy to follow. */
+.lt-portmap:has(.lt-link:hover) .lt-link:not(:hover), .lt-portmap.has-selection .lt-link:not(.selected) { opacity: .18; }
+.lt-device-body { fill: var(--mud-palette-background-gray); stroke: var(--mud-palette-lines-default); stroke-width: 1.5; }
+.lt-block-title { font-size: 10px; fill: var(--mud-palette-text-secondary); }
+.lt-port-cell { cursor: pointer; }
+.lt-port { fill: var(--mud-palette-surface); stroke: var(--mud-palette-lines-inputs); stroke-width: 1.5; }
+.lt-port.connected { fill: var(--mud-palette-success); stroke: var(--mud-palette-success-darken); }
+.lt-port.linked { fill: var(--mud-palette-primary); stroke: var(--mud-palette-primary-darken); }
+.lt-port.selected { stroke: var(--mud-palette-secondary); stroke-width: 3.5; }
+.lt-port-cell:hover .lt-port { filter: brightness(1.15); stroke-width: 2.5; }
+.lt-port-label { font-size: 10px; fill: var(--mud-palette-text-secondary); pointer-events: none; user-select: none; }
+.lt-port-label.on { fill: #fff; font-weight: 600; }
+.lt-link { cursor: pointer; }
+.lt-link-hit { fill: none; stroke: transparent; stroke-width: 12; }
+.lt-link-line { fill: none; stroke-width: 2.5; opacity: .85; }
+.lt-link:hover .lt-link-line, .lt-link.selected .lt-link-line { stroke-width: 4.5; opacity: 1; }
+.lt-legend-swatch { display: inline-block; width: 14px; height: 14px; border-radius: 3px; vertical-align: middle; margin-right: 4px; border: 1px solid var(--mud-palette-lines-inputs); }

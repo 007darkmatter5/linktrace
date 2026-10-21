@@ -1,0 +1,519 @@
+@page "/devices/{Id:int}/faceplate"
+@attribute [Authorize(Policy = AppPolicies.CanEdit)]
+@inherits AppPageBase
+@inject DeviceService DeviceSvc
+@inject FaceplateService Faceplates
+
+<PageTitle>Faceplate · @(_device?.Name) · Linktrace</PageTitle>
+
+@if (_device is null || _working is null)
+{
+    @if (_loaded) { <MudAlert Severity="Severity.Warning">Device not found.</MudAlert> }
+    else { <MudProgressLinear Indeterminate="true" /> }
+    return;
+}
+
+<MudBreadcrumbs Items="@([new("Devices", "devices"), new(_device.Name, $"devices/{_device.Id}"), new("Faceplate", null, disabled: true)])" Class="px-0" />
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-1">
+    <MudIcon Icon="@Icons.Material.Filled.GridOn" Size="Size.Large" Color="Color.Primary" />
+    <MudText Typo="Typo.h4">Faceplate layout</MudText>
+    <MudSpacer />
+    <MudButton Variant="Variant.Text" Href="@($"devices/{_device.Id}")">Cancel</MudButton>
+    <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Save" OnClick="Save" Disabled="_busy">Save layout</MudButton>
+</MudStack>
+<MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mb-3">
+    Drag ports onto the grid, or click a port and then a cell; everything snaps to a cell. Click a placed port, then another cell, to move it (dropping onto another port swaps them).
+</MudText>
+
+@* The native handler gives Firefox the drag data it needs; Blazor handles the rest. *@
+<div ondragstart="event.dataTransfer && event.dataTransfer.setData('text/plain', 'port')">
+<MudGrid Spacing="3">
+    <MudItem xs="12" lg="9">
+        <MudPaper Outlined="true" Class="pa-3 mb-3">
+            <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2" Class="mb-3">
+                <MudNumericField T="int" Value="_working.Columns" ValueChanged="SetColumns" Label="Columns" Min="1" Max="FaceplateGrid.MaxColumns"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 110px" />
+                <MudNumericField T="int" Value="_working.Rows" ValueChanged="SetRows" Label="Rows" Min="1" Max="FaceplateGrid.MaxRows"
+                                 Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 110px" />
+                <MudDivider Vertical="true" FlexItem="true" />
+                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.AutoFixHigh" OnClick="StartFromAuto">Start from automatic layout</MudButton>
+                <MudButton Size="Size.Small" StartIcon="@Icons.Material.Filled.ClearAll" OnClick="ClearGrid">Clear grid</MudButton>
+                @if (_selected is not null)
+                {
+                    <MudButton Size="Size.Small" Color="Color.Error" StartIcon="@Icons.Material.Filled.RemoveCircleOutline" OnClick="RemoveSelected">Remove selected</MudButton>
+                }
+            </MudStack>
+
+            <div style="overflow-x: auto; padding: 2px">
+                <div class="lt-fp-grid" style="@($"grid-template-columns: repeat({_working.Columns}, 34px); grid-template-rows: repeat({_working.Rows}, 34px)")">
+                    @foreach (var row in Enumerable.Range(0, _working.Rows))
+                    {
+                        @foreach (var col in Enumerable.Range(0, _working.Columns))
+                        {
+                            <div class="@($"lt-fp-cell {(_selectedCell == (col, row) ? "selected" : "")}")"
+                                 style="@($"grid-column: {col + 1}; grid-row: {row + 1}")"
+                                 title="@($"Column {col + 1}, row {row + 1}")"
+                                 @onclick="() => CellClick(col, row)"
+                                 @ondragover:preventDefault="true"
+                                 @ondrop="() => Drop(col, row)"></div>
+                        }
+                    }
+                    @foreach (var label in _working.Labels)
+                    {
+                        <div class="@($"lt-fp-label {(_selected == label ? "selected" : "")}")" draggable="true"
+                             style="@($"grid-column: {label.Col + 1} / span {label.Span}; grid-row: {label.Row + 1}")"
+                             @onclick="() => Select(label)" @ondragstart="() => _drag = label"
+                             @ondragover:preventDefault="true" @ondrop="() => Drop(label.Col, label.Row)">
+                            @label.Text
+                        </div>
+                    }
+                    @foreach (var pl in _working.Placements)
+                    {
+                        var port = PortFor(pl);
+                        <div class="@($"lt-fp-port {(pl.Face == PortFace.Rear ? "rear" : "")} {(IsSelected(pl) ? "selected" : "")}")" draggable="true"
+                             style="@($"grid-column: {pl.Col + 1}; grid-row: {pl.Row + 1}; {(port is null ? "opacity: .4" : "")}")"
+                             title="@(port is null ? $"{pl.PortName} (no longer on this device)" : $"{Display.PortOnly(port)} · column {pl.Col + 1}, row {pl.Row + 1}")"
+                             @onclick="() => PlacedClick(pl)" @ondragstart="() => _drag = (object?)port ?? pl"
+                             @ondragover:preventDefault="true" @ondrop="() => Drop(pl.Col, pl.Row)">
+                            @FaceplateLayout.ShortLabel(pl.PortName)
+                        </div>
+                    }
+                </div>
+            </div>
+
+            @* Context tools for the selected cell or label *@
+            @if (_selected is FaceplateLabel selLabel)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-3">
+                    <MudText Typo="Typo.body2"><b>Label</b></MudText>
+                    <MudTextField T="string" Value="selLabel.Text" ValueChanged="t => selLabel.Text = t" Label="Text" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" Style="max-width: 200px" />
+                    <MudNumericField T="int" Value="selLabel.Span" ValueChanged="s => SetSpan(selLabel, s)" Label="Cells wide" Min="1" Max="_working.Columns"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px" />
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">Drag it, or click a cell, to move it.</MudText>
+                </MudStack>
+            }
+            else if (_selectedCell is { } cell)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2" Class="mt-3">
+                    <MudText Typo="Typo.body2"><b>Column @(cell.Col + 1), row @(cell.Row + 1)</b></MudText>
+                    <MudTextField @bind-Value="_newLabelText" Label="Label text" Placeholder="e.g. WAN, SFP+" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 180px" />
+                    <MudNumericField @bind-Value="_newLabelSpan" Label="Cells wide" Min="1" Max="_working.Columns" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px" />
+                    <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Title" OnClick="AddLabel">Add label here</MudButton>
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">…or use “Fill from selected cell” on a port group.</MudText>
+                </MudStack>
+            }
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="pa-3">
+            <MudText Typo="Typo.subtitle1" Class="mb-1">Preview</MudText>
+            <PortMapSvg Scene="PreviewScene" />
+        </MudPaper>
+    </MudItem>
+
+    <MudItem xs="12" lg="3">
+        <MudPaper Outlined="true" Class="pa-3 mb-3">
+            <MudText Typo="Typo.subtitle1">Ports not on the grid (@Unplaced.Count)</MudText>
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">Click one, then click cells to place them in order.</MudText>
+            @if (Unplaced.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Class="mt-2">All ports are placed. 🎉</MudText>
+            }
+            @foreach (var group in UnplacedGroups)
+            {
+                <div class="mt-3">
+                    <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                        <MudText Typo="Typo.body2"><b>@group.Key</b> (@group.Count())</MudText>
+                        <MudSpacer />
+                        <MudMenu Icon="@Icons.Material.Filled.GridGoldenratio" Size="Size.Small" Dense="true" title="Fill from selected cell"
+                                 Disabled="_selectedCell is null">
+                            <MudMenuItem OnClick="() => Fill(group.ToList(), FillOrder.RowByRow)">Fill → left to right</MudMenuItem>
+                            <MudMenuItem OnClick="() => Fill(group.ToList(), FillOrder.OddEven)">Fill odd on top, even below</MudMenuItem>
+                            <MudMenuItem OnClick="() => Fill(group.ToList(), FillOrder.ColumnDown)">Fill ↓ down each column</MudMenuItem>
+                        </MudMenu>
+                    </MudStack>
+                    <div>
+                        @foreach (var p in group)
+                        {
+                            <span class="@($"lt-fp-chip {(p.Face == PortFace.Rear ? "rear" : "")} {(_selected == p ? "selected" : "")}")" draggable="true"
+                                  title="@Display.PortOnly(p)" @onclick="() => Select(p)" @ondragstart="() => _drag = p">@FaceplateLayout.ShortLabel(p.Name)</span>
+                        }
+                    </div>
+                </div>
+            }
+            @if (_selectedCell is null && Unplaced.Count > 0)
+            {
+                <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)" Class="mt-2 d-block">Tip: select an empty cell to fill a whole group at once (the grid icon next to each group).</MudText>
+            }
+        </MudPaper>
+
+        <MudPaper Outlined="true" Class="pa-3">
+            <MudText Typo="Typo.subtitle1" Class="mb-2">Save</MudText>
+            <MudTextField @bind-Value="_working.Name" Label="Layout name" Required="true" MaxLength="100" Margin="Margin.Dense" />
+            <MudTextField T="string" Value="_working.Model" ValueChanged="ModelChanged" Label="For model" MaxLength="100" Margin="Margin.Dense"
+                          HelperText="New devices with this model use it automatically" DebounceInterval="400" />
+            @if (_sameModel.Count > 0)
+            {
+                <MudCheckBox @bind-Value="_applyToSameModel" Color="Color.Primary" Dense="true">
+                    Also use for the @_sameModel.Count other @_working.Model device(s)
+                </MudCheckBox>
+            }
+            @if (_working.Id != 0 && _usage > 1)
+            {
+                <MudRadioGroup T="bool" @bind-Value="_saveAsNew" Class="mt-2">
+                    <MudRadio Value="false" Color="Color.Primary" Dense="true">Update the shared layout (@_usage devices)</MudRadio>
+                    <MudRadio Value="true" Color="Color.Primary" Dense="true">Save a separate copy for @_device.Name</MudRadio>
+                </MudRadioGroup>
+            }
+            <MudButton FullWidth="true" Variant="Variant.Filled" Color="Color.Primary" Class="mt-3" OnClick="Save" Disabled="_busy">Save layout</MudButton>
+
+            <MudDivider Class="my-3" />
+            @if (_templates.Count > 0)
+            {
+                <MudSelect T="int?" Value="null" ValueChanged="UseExisting" Label="…or use an existing layout" Margin="Margin.Dense">
+                    @foreach (var t in _templates.Where(t => t.Id != _working.Id))
+                    {
+                        <MudSelectItem T="int?" Value="t.Id">@t.Name (@t.Columns×@t.Rows)</MudSelectItem>
+                    }
+                </MudSelect>
+            }
+            @if (_device.FaceplateTemplateId is not null)
+            {
+                <MudButton FullWidth="true" Variant="Variant.Text" Class="mt-2" StartIcon="@Icons.Material.Filled.AutoMode" OnClick="UseAutomatic">
+                    Go back to the automatic layout
+                </MudButton>
+            }
+        </MudPaper>
+    </MudItem>
+</MudGrid>
+</div>
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private enum FillOrder { RowByRow, OddEven, ColumnDown }
+
+    private Device? _device;
+    private FaceplateTemplate? _working;
+    private bool _loaded, _busy;
+    private int _usage;
+    private List<int> _sameModel = [];
+    private bool _applyToSameModel = true;
+    private bool _saveAsNew;
+    private List<FaceplateTemplateInfo> _templates = [];
+
+    // Selection: a Port (from the list or the grid), a FaceplatePlacement (port no longer on the device), or a FaceplateLabel.
+    private object? _selected;
+    private (int Col, int Row)? _selectedCell;
+    private object? _drag;
+    private string? _newLabelText;
+    private int _newLabelSpan = 1;
+
+    protected override async Task OnParametersSetAsync()
+    {
+        _device = await DeviceSvc.GetAsync(Id);
+        _loaded = true;
+        if (_device is null) return;
+
+        _templates = await Faceplates.GetTemplatesAsync();
+        if (_device.FaceplateTemplate is { } t)
+        {
+            _working = Copy(t);
+            _usage = await Faceplates.UsageCountAsync(t.Id);
+        }
+        else
+        {
+            _working = FaceplateLayout.AutoTemplate(_device, _device.Ports);
+            _working.Name = UniqueName(_device.Model ?? _device.Name);
+            _working.Model = _device.Model;
+            _usage = 0;
+        }
+        _sameModel = await Faceplates.SameModelDeviceIdsAsync(_working.Model, _device.Id);
+        _selected = null;
+        _selectedCell = null;
+    }
+
+    private string UniqueName(string baseName)
+    {
+        var name = baseName;
+        for (var i = 2; _templates.Any(t => t.Name.Equals(name, StringComparison.OrdinalIgnoreCase)); i++) name = $"{baseName} ({i})";
+        return name;
+    }
+
+    private static FaceplateTemplate Copy(FaceplateTemplate t) => new()
+    {
+        Id = t.Id, Version = t.Version, Name = t.Name, Model = t.Model, Columns = t.Columns, Rows = t.Rows,
+        Placements = t.Placements.Select(p => new FaceplatePlacement { PortName = p.PortName, Face = p.Face, Col = p.Col, Row = p.Row }).ToList(),
+        Labels = t.Labels.Select(l => new FaceplateLabel { Text = l.Text, Col = l.Col, Row = l.Row, Span = l.Span }).ToList()
+    };
+
+    // ---- Lookups ----
+
+    private Port? PortFor(FaceplatePlacement pl) =>
+        _device!.Ports.FirstOrDefault(p => FaceplateLayout.Key(p.Face, p.Name) == FaceplateLayout.Key(pl.Face, pl.PortName));
+
+    private FaceplatePlacement? PlacementOf(Port p) =>
+        _working!.Placements.FirstOrDefault(pl => FaceplateLayout.Key(pl.Face, pl.PortName) == FaceplateLayout.Key(p.Face, p.Name));
+
+    private List<Port> Unplaced => _device!.Ports.Where(p => PlacementOf(p) is null).OrderBy(p => p.Position).ToList();
+
+    private IEnumerable<IGrouping<string, Port>> UnplacedGroups => Unplaced
+        .GroupBy(p => FaceplateLayout.Title(p.Face, FaceplateLayout.Split(p.Name).Prefix))
+        .Select(g => g.OrderBy(p => FaceplateLayout.Split(p.Name).Number ?? int.MaxValue).ThenBy(p => p.Position).GroupBy(_ => g.Key).First());
+
+    private FaceplatePlacement? PortAt(int col, int row) => _working!.Placements.FirstOrDefault(p => p.Col == col && p.Row == row);
+
+    private FaceplateLabel? LabelAt(int col, int row, FaceplateLabel? except = null) =>
+        _working!.Labels.FirstOrDefault(l => l != except && l.Row == row && col >= l.Col && col < l.Col + l.Span);
+
+    private bool IsSelected(FaceplatePlacement pl) => _selected == pl || (_selected is Port p && PlacementOf(p) == pl);
+
+    private PortMapScene PreviewScene
+    {
+        get
+        {
+            var preview = _device!.EditCopy();
+            preview.FaceplateTemplate = _working;
+            return PortMapScene.Single(preview);
+        }
+    }
+
+    // ---- Selection & clicks ----
+
+    private void Select(object item)
+    {
+        _selected = _selected == item ? null : item;
+        _selectedCell = null;
+    }
+
+    private void CellClick(int col, int row)
+    {
+        switch (_selected)
+        {
+            case Port p:
+                var fromList = PlacementOf(p) is null;
+                if (Place(p, col, row))
+                    _selected = fromList ? NextUnplacedAfter(p) : null; // keep placing from the list in order
+                break;
+            case FaceplatePlacement orphan:
+                MovePlacement(orphan, col, row);
+                _selected = null;
+                break;
+            case FaceplateLabel label:
+                MoveLabel(label, col, row);
+                break;
+            default:
+                _selectedCell = _selectedCell == (col, row) ? null : (col, row);
+                break;
+        }
+    }
+
+    private void PlacedClick(FaceplatePlacement pl)
+    {
+        var port = PortFor(pl);
+        // Another port is selected: put it here (swapping).
+        if (_selected is Port other && port != other) { CellClick(pl.Col, pl.Row); return; }
+        Select((object?)port ?? pl);
+    }
+
+    private void Drop(int col, int row)
+    {
+        switch (_drag)
+        {
+            case Port p: Place(p, col, row); break;
+            case FaceplatePlacement pl: MovePlacement(pl, col, row); break;
+            case FaceplateLabel l: MoveLabel(l, col, row); break;
+        }
+        _drag = null;
+    }
+
+    private Port? NextUnplacedAfter(Port p)
+    {
+        var group = UnplacedGroups.FirstOrDefault(g => g.Key == FaceplateLayout.Title(p.Face, FaceplateLayout.Split(p.Name).Prefix));
+        return group?.FirstOrDefault();
+    }
+
+    // ---- Editing (everything snaps to whole cells) ----
+
+    /// <summary>Puts a port in a cell. If another port is there, the two swap (or the other goes back to the list).</summary>
+    private bool Place(Port p, int col, int row)
+    {
+        if (LabelAt(col, row) is not null) { Snackbar.Add("That cell has a label. Move or remove the label first.", Severity.Warning); return false; }
+        var existing = PlacementOf(p);
+        var occupant = PortAt(col, row);
+        if (occupant == existing && existing is not null) return true;
+
+        if (occupant is not null)
+        {
+            if (existing is not null) { occupant.Col = existing.Col; occupant.Row = existing.Row; }
+            else _working!.Placements.Remove(occupant);
+        }
+        if (existing is not null) { existing.Col = col; existing.Row = row; }
+        else _working!.Placements.Add(new FaceplatePlacement { PortName = p.Name, Face = p.Face, Col = col, Row = row });
+        return true;
+    }
+
+    private void MovePlacement(FaceplatePlacement pl, int col, int row)
+    {
+        if (LabelAt(col, row) is not null) { Snackbar.Add("That cell has a label.", Severity.Warning); return; }
+        if (PortAt(col, row) is { } occupant && occupant != pl) { occupant.Col = pl.Col; occupant.Row = pl.Row; }
+        pl.Col = col;
+        pl.Row = row;
+    }
+
+    private void MoveLabel(FaceplateLabel label, int col, int row)
+    {
+        col = Math.Min(col, _working!.Columns - label.Span);
+        if (col < 0) return;
+        for (var c = col; c < col + label.Span; c++)
+            if (PortAt(c, row) is not null || LabelAt(c, row, except: label) is not null)
+            {
+                Snackbar.Add("The label doesn't fit there; some of those cells are taken.", Severity.Warning);
+                return;
+            }
+        label.Col = col;
+        label.Row = row;
+    }
+
+    private void SetSpan(FaceplateLabel label, int span)
+    {
+        span = Math.Clamp(span, 1, _working!.Columns - label.Col);
+        for (var c = label.Col; c < label.Col + span; c++)
+            if (PortAt(c, label.Row) is not null || LabelAt(c, label.Row, except: label) is not null)
+            {
+                Snackbar.Add("Can't widen the label over other items.", Severity.Warning);
+                return;
+            }
+        label.Span = span;
+    }
+
+    private void AddLabel()
+    {
+        if (_selectedCell is not { } cell || string.IsNullOrWhiteSpace(_newLabelText)) return;
+        var label = new FaceplateLabel { Text = _newLabelText.Trim(), Col = cell.Col, Row = cell.Row, Span = 1 };
+        if (PortAt(cell.Col, cell.Row) is not null || LabelAt(cell.Col, cell.Row) is not null)
+        {
+            Snackbar.Add("That cell is taken.", Severity.Warning);
+            return;
+        }
+        _working!.Labels.Add(label);
+        SetSpan(label, _newLabelSpan);
+        _newLabelText = null;
+        _newLabelSpan = 1;
+        _selectedCell = null;
+    }
+
+    private void RemoveSelected()
+    {
+        switch (_selected)
+        {
+            case Port p when PlacementOf(p) is { } pl: _working!.Placements.Remove(pl); break;
+            case FaceplatePlacement pl: _working!.Placements.Remove(pl); break;
+            case FaceplateLabel l: _working!.Labels.Remove(l); break;
+        }
+        _selected = null;
+    }
+
+    /// <summary>Places a group's unplaced ports into empty cells, starting at the selected cell.</summary>
+    private void Fill(List<Port> ports, FillOrder order)
+    {
+        if (_selectedCell is not { } start) return;
+        var (cols, rows) = (_working!.Columns, _working.Rows);
+
+        IEnumerable<(int Col, int Row)> Cells()
+        {
+            switch (order)
+            {
+                case FillOrder.RowByRow:
+                    for (var r = start.Row; r < rows; r++)
+                        for (var c = start.Col; c < cols; c++) yield return (c, r);
+                    break;
+                case FillOrder.OddEven:
+                    for (var r = start.Row; r + 1 < rows; r += 2)
+                        for (var c = start.Col; c < cols; c++) { yield return (c, r); yield return (c, r + 1); }
+                    break;
+                case FillOrder.ColumnDown:
+                    for (var c = start.Col; c < cols; c++)
+                        for (var r = start.Row; r < rows; r++) yield return (c, r);
+                    break;
+            }
+        }
+
+        var free = Cells().Where(cell => PortAt(cell.Col, cell.Row) is null && LabelAt(cell.Col, cell.Row) is null).GetEnumerator();
+        var placed = 0;
+        foreach (var p in ports)
+        {
+            if (!free.MoveNext()) break;
+            _working.Placements.Add(new FaceplatePlacement { PortName = p.Name, Face = p.Face, Col = free.Current.Col, Row = free.Current.Row });
+            placed++;
+        }
+        if (placed < ports.Count)
+            Snackbar.Add($"Placed {placed} of {ports.Count}; not enough empty cells from there. Add columns or rows, or start further left.", Severity.Warning);
+        _selectedCell = null;
+    }
+
+    private void SetColumns(int value) => Resize(Math.Clamp(value, 1, FaceplateGrid.MaxColumns), _working!.Rows);
+    private void SetRows(int value) => Resize(_working!.Columns, Math.Clamp(value, 1, FaceplateGrid.MaxRows));
+
+    private void Resize(int cols, int rows)
+    {
+        var w = _working!;
+        var dropped = w.Placements.RemoveAll(p => p.Col >= cols || p.Row >= rows);
+        w.Labels.RemoveAll(l => l.Col >= cols || l.Row >= rows);
+        foreach (var l in w.Labels) l.Span = Math.Min(l.Span, cols - l.Col);
+        w.Columns = cols;
+        w.Rows = rows;
+        if (_selectedCell is { } c && (c.Col >= cols || c.Row >= rows)) _selectedCell = null;
+        if (dropped > 0) Snackbar.Add($"{dropped} port(s) were outside the new size and went back to the list.", Severity.Info);
+    }
+
+    private async Task StartFromAuto()
+    {
+        if (_working!.Placements.Count > 0 && !await Dialogs.ConfirmAsync("Start over", "Replace the current grid with the automatic layout?", "Replace")) return;
+        var auto = FaceplateLayout.AutoTemplate(_device!, _device!.Ports);
+        _working.Columns = auto.Columns;
+        _working.Rows = auto.Rows;
+        _working.Placements = auto.Placements;
+        _working.Labels = auto.Labels;
+        _selected = null;
+        _selectedCell = null;
+    }
+
+    private async Task ClearGrid()
+    {
+        if (!await Dialogs.ConfirmAsync("Clear grid", "Remove every port and label from the grid?", "Clear")) return;
+        _working!.Placements.Clear();
+        _working.Labels.Clear();
+        _selected = null;
+    }
+
+    // ---- Saving ----
+
+    private async Task ModelChanged(string? model)
+    {
+        _working!.Model = model;
+        _sameModel = await Faceplates.SameModelDeviceIdsAsync(model, _device!.Id);
+    }
+
+    private async Task Save()
+    {
+        _busy = true;
+        var ok = await Snackbar.RunAsync(() => Faceplates.SaveAsync(_working!, _device!.Id, _saveAsNew, _applyToSameModel && _sameModel.Count > 0),
+            "Faceplate layout saved");
+        _busy = false;
+        if (ok) Nav.NavigateTo($"devices/{_device!.Id}");
+    }
+
+    private async Task UseExisting(int? templateId)
+    {
+        if (templateId is null) return;
+        if (await Snackbar.RunAsync(() => Faceplates.AssignAsync(_device!.Id, templateId), "Layout applied"))
+            await OnParametersSetAsync();
+    }
+
+    private async Task UseAutomatic()
+    {
+        if (await Snackbar.RunAsync(() => Faceplates.AssignAsync(_device!.Id, null), "Back to the automatic layout"))
+            Nav.NavigateTo($"devices/{_device!.Id}");
+    }
+}

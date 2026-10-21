@@ -1,0 +1,75 @@
+@page "/admin/users"
+@attribute [Authorize(Policy = AppPolicies.Admin)]
+@inherits AppPageBase
+@inject UserAdminService UserAdmin
+
+<PageTitle>Users · Linktrace</PageTitle>
+
+<MudText Typo="Typo.h4" GutterBottom="true">Users</MudText>
+
+<MudAlert Severity="Severity.Info" Class="mb-4" Dense="true">
+    New accounts start as <b>Viewer</b> (read-only). <b>Editors</b> can change sites, devices, ports and cables. <b>Admins</b> can also manage users.
+</MudAlert>
+
+<MudTable Items="_users" Dense="true" Hover="true" Outlined="true" Loading="_users.Count == 0 && _loading" Breakpoint="Breakpoint.Sm">
+    <HeaderContent>
+        <MudTh>User</MudTh>
+        <MudTh>Role</MudTh>
+        <MudTh>Status</MudTh>
+        <MudTh></MudTh>
+    </HeaderContent>
+    <RowTemplate>
+        <MudTd DataLabel="User">@context.UserName</MudTd>
+        <MudTd DataLabel="Role">
+            <MudSelect T="string" Value="context.Role" ValueChanged="role => SetRole(context, role)" Dense="true" Margin="Margin.Dense" Style="max-width: 160px">
+                @foreach (var r in AppRoles.All)
+                {
+                    <MudSelectItem Value="r">@r</MudSelectItem>
+                }
+            </MudSelect>
+        </MudTd>
+        <MudTd DataLabel="Status">
+            @if (context.LockedOut)
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Error">Locked</MudChip>
+            }
+            else
+            {
+                <MudChip T="string" Size="Size.Small" Color="Color.Success" Variant="Variant.Text">Active</MudChip>
+            }
+        </MudTd>
+        <MudTd Style="text-align: right">
+            <MudButton Size="Size.Small" OnClick="() => ToggleLock(context)">@(context.LockedOut ? "Unlock" : "Lock")</MudButton>
+        </MudTd>
+    </RowTemplate>
+</MudTable>
+
+@code {
+    private List<UserListItem> _users = [];
+    private bool _loading = true;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await Load();
+    }
+
+    private async Task Load()
+    {
+        _loading = true;
+        await Snackbar.RunAsync(async () => _users = await UserAdmin.GetUsersAsync());
+        _loading = false;
+    }
+
+    private async Task SetRole(UserListItem user, string role)
+    {
+        await Snackbar.RunAsync(() => UserAdmin.SetRoleAsync(user.Id, role), $"{user.UserName} is now {role}");
+        await Load();
+    }
+
+    private async Task ToggleLock(UserListItem user)
+    {
+        await Snackbar.RunAsync(() => UserAdmin.SetLockedAsync(user.Id, !user.LockedOut), user.LockedOut ? "Unlocked" : "Locked");
+        await Load();
+    }
+}

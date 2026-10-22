@@ -180,7 +180,7 @@ public class DeviceTemplateService(IDbContextFactory<ApplicationDbContext> facto
     public static string FileName(IReadOnlyList<DeviceTemplateInfo> templates) =>
         templates.Count == 1 ? $"{Safe(templates[0].Name)}.linktrace-template.json" : $"linktrace-templates-{DateTime.UtcNow:yyyyMMdd}.json";
 
-    private static string Safe(string s) => new string(s.Select(c => Path.GetInvalidFileNameChars().Contains(c) || c == ' ' ? '-' : c).ToArray()).Trim('-');
+    private static string Safe(string s) => FileNames.Safe(s).Replace(' ', '-').Trim('-');
 
     /// <summary>Reads and checks a template file without changing anything.</summary>
     public async Task<TemplateImportPreview> PreviewAsync(Stream json)

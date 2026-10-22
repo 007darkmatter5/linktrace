@@ -44,7 +44,8 @@ public class PortMapPdfTests
     [Theory]
     [InlineData("HuntWeis Comm Rack", "HuntWeis Comm Rack.pdf")]
     [InlineData("a/b:c", "a-b-c.pdf")]
+    [InlineData("a\\b*c?d\"e<f>g|h", "a-b-c-d-e-f-g-h.pdf")]
     [InlineData("   ", "port-map.pdf")]
-    public void File_names_are_safe(string title, string expected)
-        => Assert.Equal(expected, PortMapPdfService.FileName(title).Replace('\\', '-'));
+    public void File_names_are_safe_on_every_os(string title, string expected)
+        => Assert.Equal(expected, PortMapPdfService.FileName(title)); // same answer whether the server runs Windows or Linux
 }

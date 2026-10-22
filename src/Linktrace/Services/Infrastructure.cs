@@ -117,6 +117,17 @@ public abstract class ServiceBase(IDbContextFactory<ApplicationDbContext> factor
 
 public enum MediaFamily { Copper, Fiber, Transceiver, Usb, Power, Coax, Console, Other }
 
+public static class FileNames
+{
+    // Characters Windows, macOS or Linux reject in file names. A fixed list (not the server OS's own),
+    // because downloads are saved on the user's computer, which may not be the same OS as the server.
+    private static readonly char[] Unsafe = ['\\', '/', ':', '*', '?', '"', '<', '>', '|'];
+
+    /// <summary>Replaces characters that aren't allowed in file names with <paramref name="replacement"/>.</summary>
+    public static string Safe(string name, char replacement = '-') =>
+        new string(name.Select(c => Unsafe.Contains(c) || char.IsControl(c) ? replacement : c).ToArray()).Trim();
+}
+
 public static class Display
 {
     public static string Face(PortFace face) => face switch

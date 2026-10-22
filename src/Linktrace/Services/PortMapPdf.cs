@@ -43,7 +43,7 @@ public class PortMapPdfService(DeviceService devices, PortMapService portMaps)
 
     public static string FileName(string title)
     {
-        var safe = new string(title.Select(c => Path.GetInvalidFileNameChars().Contains(c) ? '-' : c).ToArray()).Trim();
+        var safe = FileNames.Safe(title);
         return $"{(safe.Length == 0 ? "port-map" : safe)}.pdf";
     }
 

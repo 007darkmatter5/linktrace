@@ -1,0 +1,132 @@
+@* Brings existing devices in line with a device template: missing ports, connectors, sides, pairs and layout. *@
+@inherits DialogBase
+@inject DeviceTemplateService Templates
+
+<MudDialog>
+    <DialogContent>
+        @if (DeviceId is not null)
+        {
+            <MudSelect T="int?" Value="_templateId" ValueChanged="TemplateChanged" Label="Template" Dense="true" Class="mb-3"
+                       HelperText="@(_templates.Count == 0 ? "No templates yet. Save one from a device that's set up the way you want." : null)">
+                @foreach (var t in _templates)
+                {
+                    <MudSelectItem T="int?" Value="@t.Id">@t.Name@(t.Model is null ? "" : $" ({t.Model})")</MudSelectItem>
+                }
+            </MudSelect>
+        }
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Ports are matched by name, so existing ports keep their cables, descriptions and places in port maps.
+            Missing ports are added, connectors, sides and front/rear pairs are corrected, and each device gets the template's
+            faceplate layout, height and model details. The device's name, location and notes don't change.
+        </MudText>
+
+        @if (_loading)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_templateId is not null && _plans.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info">No devices have this template's model@(_model is null ? "" : $" ({_model})").</MudAlert>
+        }
+        else
+        {
+            @foreach (var plan in _plans)
+            {
+                var p = plan;
+                <MudPaper Outlined="true" Class="pa-2 mb-2">
+                    <MudCheckBox T="bool" Value="_chosen.Contains(p.DeviceId)" ValueChanged="on => Toggle(p.DeviceId, on)" Color="Color.Primary" Dense="true"
+                                 Disabled="!p.HasChanges && !(_removeExtras && p.ExtraPorts.Count > 0)">
+                        <b>@p.DeviceName</b>
+                        <span style="color: var(--mud-palette-text-secondary)">@(p.Model is null ? "" : $" · {p.Model}")@(p.SameModel ? "" : " · different model")</span>
+                    </MudCheckBox>
+                    <div class="ml-10" style="font-size: 0.85rem">
+                        @if (!p.HasChanges && p.ExtraPorts.Count + p.ExtraCabledPorts.Count == 0)
+                        {
+                            <div style="color: var(--mud-palette-success)">Already matches.</div>
+                        }
+                        @if (p.AddPorts.Count > 0) { <div><b>Add:</b> @Summary(p.AddPorts)</div> }
+                        @if (p.ChangePorts.Count > 0) { <div><b>Change:</b> @Summary(p.ChangePorts)</div> }
+                        @if (p.DetailChanges.Count > 0) { <div><b>Device:</b> @string.Join(", ", p.DetailChanges)</div> }
+                        @if (p.ExtraPorts.Count > 0)
+                        {
+                            <div style="color: var(--mud-palette-text-secondary)"><b>Not in template:</b> @Summary(p.ExtraPorts)@(_removeExtras ? " (will be removed)" : " (kept)")</div>
+                        }
+                        @if (p.ExtraCabledPorts.Count > 0)
+                        {
+                            <div style="color: var(--mud-palette-warning)"><b>Not in template, cabled:</b> @Summary(p.ExtraCabledPorts) (always kept)</div>
+                        }
+                    </div>
+                </MudPaper>
+            }
+            @if (_plans.Any(p => p.ExtraPorts.Count > 0))
+            {
+                <MudCheckBox @bind-Value="_removeExtras" Color="Color.Warning" Dense="true">
+                    Remove ports that aren't in the template (only ones without a cable)
+                </MudCheckBox>
+            }
+        }
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Apply" Busy="Busy || _chosen.Count == 0"
+                      SaveText="@(_chosen.Count == 1 ? "Update 1 device" : $"Update {_chosen.Count} devices")" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    /// <summary>The template to update from. Leave unset when opened from a device, to pick one.</summary>
+    [Parameter] public int? TemplateId { get; set; }
+    /// <summary>Opened from this device's page: it's listed (and ticked) even if its model differs.</summary>
+    [Parameter] public int? DeviceId { get; set; }
+    [Parameter] public string? DeviceModel { get; set; }
+
+    private List<DeviceTemplateInfo> _templates = [];
+    private int? _templateId;
+    private string? _model;
+    private List<TemplateSyncPlan> _plans = [];
+    private readonly HashSet<int> _chosen = [];
+    private bool _removeExtras, _loading;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _templates = await Templates.GetAllAsync();
+        _templateId = TemplateId ?? (await Templates.FindForModelAsync(DeviceModel))?.Id ?? (_templates.Count == 1 ? _templates[0].Id : null);
+        await LoadPlans();
+    }
+
+    private async Task TemplateChanged(int? id)
+    {
+        _templateId = id;
+        await LoadPlans();
+    }
+
+    private async Task LoadPlans()
+    {
+        _plans = [];
+        _chosen.Clear();
+        if (_templateId is not int id) return;
+        _loading = true;
+        try
+        {
+            _model = _templates.FirstOrDefault(t => t.Id == id)?.Model;
+            _plans = await Templates.PlanSyncAsync(id, DeviceId is int d ? [d] : null);
+            // From a device page only that device starts ticked; from the templates page, every device that needs it.
+            foreach (var p in _plans.Where(p => p.HasChanges && (DeviceId is null || p.DeviceId == DeviceId)))
+                _chosen.Add(p.DeviceId);
+        }
+        catch (LinktraceException ex) { Error = ex.Message; }
+        finally { _loading = false; }
+    }
+
+    private void Toggle(int deviceId, bool on)
+    {
+        if (on) _chosen.Add(deviceId); else _chosen.Remove(deviceId);
+    }
+
+    private static string Summary(List<string> items) =>
+        items.Count <= 8 ? string.Join(", ", items) : $"{string.Join(", ", items.Take(8))} and {items.Count - 8} more";
+
+    private Task Apply() => _templateId is int id
+        ? SubmitAsync(() => Templates.SyncDevicesAsync(id, _chosen.ToList(), _removeExtras))
+        : Task.CompletedTask;
+}

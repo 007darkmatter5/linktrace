@@ -134,13 +134,35 @@ public class DeviceService(IDbContextFactory<ApplicationDbContext> factory, ICur
     }
 
     /// <summary>Lightweight lookup for autocomplete pickers.</summary>
-    public async Task<List<Device>> FindAsync(string? text, int max = 30)
+    /// <summary>
+    /// Devices for a picker. Each word typed must appear in the device's name, model, manufacturer, rack, room
+    /// or site, so "rack b", "usw" or "pdu users" all work. With <paramref name="nearDeviceId"/>, devices in the
+    /// same rack come first, then the same room, then the same site.
+    /// </summary>
+    public async Task<List<Device>> FindAsync(string? text, int max = 500, int? nearDeviceId = null)
     {
         await using var ctx = await ReadAsync();
         var q = ctx.Devices.AsNoTracking().Include(d => d.Room).ThenInclude(r => r.Site).Include(d => d.Rack).AsQueryable();
-        if (!string.IsNullOrWhiteSpace(text))
-            q = q.Where(d => EF.Functions.Like(d.Name, $"%{text.Trim()}%"));
-        return await q.OrderBy(d => d.Name).Take(max).ToListAsync();
+        foreach (var word in (text ?? "").Split(' ', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var like = $"%{word}%";
+            q = q.Where(d => EF.Functions.Like(d.Name, like)
+                || (d.Model != null && EF.Functions.Like(d.Model, like))
+                || (d.Manufacturer != null && EF.Functions.Like(d.Manufacturer, like))
+                || (d.Rack != null && EF.Functions.Like(d.Rack.Name, like))
+                || EF.Functions.Like(d.Room.Name, like)
+                || EF.Functions.Like(d.Room.Site.Name, like));
+        }
+        var found = await q.OrderBy(d => d.Name).Take(max).ToListAsync();
+        if (nearDeviceId is null) return found;
+
+        var near = await ctx.Devices.AsNoTracking().Include(d => d.Room)
+            .Where(d => d.Id == nearDeviceId).Select(d => new { d.RackId, d.RoomId, d.Room.SiteId }).FirstOrDefaultAsync();
+        if (near is null) return found;
+        return found.OrderBy(d => near.RackId is not null && d.RackId == near.RackId ? 0
+                : d.RoomId == near.RoomId ? 1
+                : d.Room.SiteId == near.SiteId ? 2 : 3)
+            .ThenBy(d => d.Name, StringComparer.OrdinalIgnoreCase).ToList();
     }
 
     /// <summary>Device with location, ports, and the far end of every connected cable.</summary>

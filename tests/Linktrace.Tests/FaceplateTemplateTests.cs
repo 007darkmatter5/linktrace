@@ -86,6 +86,28 @@ public class FaceplateTemplateTests
     }
 
     [Fact]
+    public async Task Edited_labels_are_saved_on_an_existing_layout()
+    {
+        await using var db = new TestDb();
+        var room = await db.CreateRoomAsync();
+        var d = await db.CreateDeviceAsync(room, "RPS", DeviceKind.Other, new() { Count = 2 });
+        var layout = Grid(8, 2, ("1", 0, 1), ("2", 1, 1));
+        layout.Name = "RPS";
+        layout.Labels.Add(new FaceplateLabel { Text = "Front", Col = 0, Row = 0, Span = 2 });
+        await db.Faceplates.SaveAsync(layout, d.Id, asNew: true, applyToSameModel: false);
+
+        // Edit the saved layout the way the editor does: change a label, add another.
+        var saved = (await db.Devices.GetAsync(d.Id))!.FaceplateTemplate!;
+        saved.Labels[0].Text = "Outputs";
+        saved.Labels[0].Span = 4;
+        saved.Labels.Add(new FaceplateLabel { Text = "DC", Col = 5, Row = 0, Span = 2 });
+        await db.Faceplates.SaveAsync(saved, d.Id, asNew: false, applyToSameModel: false);
+
+        var reloaded = (await db.Devices.GetAsync(d.Id))!.FaceplateTemplate!;
+        Assert.Equal([("Outputs", 4), ("DC", 2)], reloaded.Labels.Select(l => (l.Text, l.Span)));
+    }
+
+    [Fact]
     public void A_wide_port_cannot_overlap_its_neighbour_or_hang_off_the_grid()
     {
         var overlap = Grid(4, 1, ("1", 0, 0), ("2", 1, 0));

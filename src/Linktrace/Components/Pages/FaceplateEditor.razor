@@ -63,9 +63,9 @@
                     {
                         <div class="@($"lt-fp-label {(_selected == label ? "selected" : "")}")" draggable="true"
                              style="@($"grid-column: {label.Col + 1} / span {label.Span}; grid-row: {label.Row + 1}")"
-                             @onclick="() => Select(label)" @ondragstart="() => _drag = label"
+                             @onclick="() => Select(label)" @ondragstart="() => _drag = label" title="@label.Text"
                              @ondragover:preventDefault="true" @ondrop="() => Drop(label.Col, label.Row)">
-                            @label.Text
+                            <span class="lt-fp-label-text">@label.Text</span>
                         </div>
                     }
                     @foreach (var pl in _working.Placements)
@@ -87,10 +87,13 @@
             {
                 <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2" Class="mt-3">
                     <MudText Typo="Typo.body2"><b>Label</b></MudText>
-                    <MudTextField T="string" Value="selLabel.Text" ValueChanged="t => selLabel.Text = t" Label="Text" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" Style="max-width: 200px" />
-                    <MudNumericField T="int" Value="selLabel.Span" ValueChanged="s => SetSpan(selLabel, s)" Label="Cells wide" Min="1" Max="_working.Columns"
-                                     Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px" />
-                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">Drag it, or click a cell, to move it.</MudText>
+                    <MudTextField T="string" Value="selLabel.Text" ValueChanged="t => SetLabelText(selLabel, t)" Label="Text" Variant="Variant.Outlined" Margin="Margin.Dense" Immediate="true" Style="max-width: 200px" />
+                    <MudNumericField T="int" Value="selLabel.Span" ValueChanged="s => SetSpan(selLabel, s)" Label="Cells wide" Min="1" Max="FreeRun(selLabel.Col, selLabel.Row, selLabel)"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px"
+                                     HelperText="@RoomText(FreeRun(selLabel.Col, selLabel.Row, selLabel))" />
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                        Drag it, or click a cell, to move it. @(NeededCells(selLabel.Text) > selLabel.Span ? "The text is longer than the label; widen it, or make room to its right." : "")
+                    </MudText>
                 </MudStack>
             }
             else if (SelectedPlacement is { } selPort)
@@ -108,8 +111,11 @@
             {
                 <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2" Class="mt-3">
                     <MudText Typo="Typo.body2"><b>Column @(cell.Col + 1), row @(cell.Row + 1)</b></MudText>
-                    <MudTextField @bind-Value="_newLabelText" Label="Label text" Placeholder="e.g. WAN, SFP+" Variant="Variant.Outlined" Margin="Margin.Dense" Style="max-width: 180px" />
-                    <MudNumericField @bind-Value="_newLabelSpan" Label="Cells wide" Min="1" Max="_working.Columns" Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px" />
+                    <MudTextField @bind-Value="_newLabelText" Label="Label text" Placeholder="e.g. WAN, SFP+" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                  Immediate="true" Style="max-width: 180px" OnKeyDown="@(e => e.Key == "Enter" ? AddLabelAsync() : Task.CompletedTask)" />
+                    <MudNumericField T="int?" @bind-Value="_newLabelSpan" Label="Cells wide" Min="1" Max="Math.Max(1, FreeRun(cell.Col, cell.Row, null))"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px" Clearable="true"
+                                     Placeholder="fit text" HelperText="@RoomText(FreeRun(cell.Col, cell.Row, null))" />
                     <MudButton Size="Size.Small" Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Title" OnClick="AddLabel">Add label here</MudButton>
                     <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">…or use “Fill from selected cell” on a port group.</MudText>
                 </MudStack>
@@ -218,7 +224,7 @@
     private (int Col, int Row)? _selectedCell;
     private object? _drag;
     private string? _newLabelText;
-    private int _newLabelSpan = 1;
+    private int? _newLabelSpan;   // null = fit the text
 
     protected override async Task OnParametersSetAsync()
     {
@@ -439,32 +445,71 @@
         label.Row = row;
     }
 
+    /// <summary>How many empty cells there are from (col, row) rightwards, ignoring <paramref name="except"/>.</summary>
+    private int FreeRun(int col, int row, FaceplateLabel? except)
+    {
+        var n = 0;
+        for (var c = col; c < _working!.Columns; c++)
+        {
+            if (PortAt(c, row) is not null || LabelAt(c, row, except) is not null) break;
+            n++;
+        }
+        return n;
+    }
+
+    private static string RoomText(int free) => free <= 1 ? "No room to widen here" : $"Room for up to {free} here";
+
+    /// <summary>Cells a label needs to show its text in full (editor cells are 34px plus a 5px gap; ~7px per character).</summary>
+    private static int NeededCells(string? text) =>
+        Math.Max(1, (int)Math.Ceiling(((text?.Trim().Length ?? 0) * 7 + 12) / 39.0));
+
+    /// <summary>Widens or narrows a label, as far as the free cells to its right allow.</summary>
     private void SetSpan(FaceplateLabel label, int span)
     {
-        span = Math.Clamp(span, 1, _working!.Columns - label.Col);
-        for (var c = label.Col; c < label.Col + span; c++)
-            if (PortAt(c, label.Row) is not null || LabelAt(c, label.Row, except: label) is not null)
-            {
-                Snackbar.Add("Can't widen the label over other items.", Severity.Warning);
-                return;
-            }
-        label.Span = span;
+        var max = Math.Max(1, FreeRun(label.Col, label.Row, label));
+        if (span > max)
+            Snackbar.Add($"Only {max} cell(s) are free from here; the label can't cover the items to its right.", Severity.Info);
+        label.Span = Math.Clamp(span, 1, max);
+    }
+
+    /// <summary>Changes a label's text and, if the text no longer fits, widens it as far as there's room.</summary>
+    private void SetLabelText(FaceplateLabel label, string? text)
+    {
+        label.Text = text ?? "";
+        var needed = NeededCells(label.Text);
+        if (needed > label.Span)
+            label.Span = Math.Min(needed, Math.Max(1, FreeRun(label.Col, label.Row, label)));
+    }
+
+    private Task AddLabelAsync()
+    {
+        AddLabel();
+        return Task.CompletedTask;
     }
 
     private void AddLabel()
     {
-        if (_selectedCell is not { } cell || string.IsNullOrWhiteSpace(_newLabelText)) return;
-        var label = new FaceplateLabel { Text = _newLabelText.Trim(), Col = cell.Col, Row = cell.Row, Span = 1 };
+        if (_selectedCell is not { } cell) return;
+        if (string.IsNullOrWhiteSpace(_newLabelText))
+        {
+            Snackbar.Add("Type the label's text first.", Severity.Info);
+            return;
+        }
         if (PortAt(cell.Col, cell.Row) is not null || LabelAt(cell.Col, cell.Row) is not null)
         {
             Snackbar.Add("That cell is taken.", Severity.Warning);
             return;
         }
+        var text = _newLabelText.Trim();
+        var free = Math.Max(1, FreeRun(cell.Col, cell.Row, null));
+        // An explicit width wins; otherwise make it as wide as the text needs, within the free space.
+        var span = Math.Clamp(_newLabelSpan ?? NeededCells(text), 1, free);
+        var label = new FaceplateLabel { Text = text, Col = cell.Col, Row = cell.Row, Span = span };
         _working!.Labels.Add(label);
-        SetSpan(label, _newLabelSpan);
         _newLabelText = null;
-        _newLabelSpan = 1;
+        _newLabelSpan = null;
         _selectedCell = null;
+        _selected = label;   // keep it selected so it can be adjusted straight away
     }
 
     private void RemoveSelected()

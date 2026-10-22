@@ -125,6 +125,42 @@ public class RackPlacementTests
     }
 
     [Fact]
+    public async Task The_device_picker_lists_devices_from_every_rack_not_just_the_first_few()
+    {
+        var (db, rack, serverRoom, office) = await SetupAsync();
+        await using var __ = db;
+        var other = await db.Locations.SaveRackAsync(new Rack { RoomId = serverRoom.Id, Name = "R2", HeightU = 42 });
+        for (var i = 1; i <= 12; i++)
+            await db.Devices.SaveAsync(new Device { Name = $"A-{i:D2}", RoomId = serverRoom.Id, RackId = rack.Id });
+        await db.Devices.SaveAsync(new Device { Name = "Z-switch in R2", RoomId = serverRoom.Id, RackId = other.Id });
+
+        var all = await db.Devices.FindAsync(null);
+
+        Assert.Equal(13, all.Count);                                   // the last one alphabetically, in the other rack, is included
+        Assert.Equal("R2", all.Single(d => d.Name == "Z-switch in R2").Rack!.Name); // with its location, for the list
+    }
+
+    [Fact]
+    public async Task The_device_picker_finds_devices_by_rack_or_model_and_lists_nearby_ones_first()
+    {
+        var (db, rack, serverRoom, office) = await SetupAsync();
+        await using var __ = db;
+        var rackB = await db.Locations.SaveRackAsync(new Rack { RoomId = serverRoom.Id, Name = "Rack B", HeightU = 42 });
+        var core = await db.Devices.SaveAsync(new Device { Name = "Core", Model = "USW-Pro-48", RoomId = serverRoom.Id, RackId = rack.Id });
+        await db.Devices.SaveAsync(new Device { Name = "Access", Model = "USW-Lite-16", RoomId = serverRoom.Id, RackId = rackB.Id });
+        await db.Devices.SaveAsync(new Device { Name = "AAA desk switch", RoomId = office.Id });
+        await db.Devices.SaveAsync(new Device { Name = "Patch", RoomId = serverRoom.Id, RackId = rack.Id });
+
+        Assert.Equal(["Access"], (await db.Devices.FindAsync("rack b")).Select(d => d.Name));      // by rack name
+        Assert.Equal(["Access", "Core"], (await db.Devices.FindAsync("usw")).Select(d => d.Name)); // by model
+        Assert.Equal(["Core"], (await db.Devices.FindAsync("usw pro")).Select(d => d.Name));       // every word must match
+
+        // From the core switch: same rack, then same room, then elsewhere.
+        var near = (await db.Devices.FindAsync(null, nearDeviceId: core.Id)).Select(d => d.Name).ToList();
+        Assert.Equal(["Core", "Patch", "Access", "AAA desk switch"], near);
+    }
+
+    [Fact]
     public async Task Taking_a_device_out_of_a_rack_keeps_it_in_the_room()
     {
         var (db, rack, serverRoom, _) = await SetupAsync();

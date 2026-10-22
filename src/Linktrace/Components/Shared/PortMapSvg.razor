@@ -24,7 +24,7 @@
                 {
                     <g>
                         <line x1="@F(label.X)" x2="@F(label.X + label.Width)" y1="@F(label.Y + FaceplateLayout.Cell - 3)" y2="@F(label.Y + FaceplateLayout.Cell - 3)" class="lt-grid-label-rule" />
-                        <text x="@F(label.X + label.Width / 2)" y="@F(label.Y + FaceplateLayout.Cell / 2 + 4)" text-anchor="middle" class="lt-grid-label">@label.Text</text>
+                        <text x="@F(label.X + label.Width / 2)" y="@F(label.Y + FaceplateLayout.Cell / 2 + 4)" text-anchor="middle" class="lt-grid-label"><title>@label.Text</title>@FitLabel(label)</text>
                     </g>
                 }
                 @foreach (var cell in placed.Plate.Cells)
@@ -110,6 +110,9 @@
     }
 
     private static string Truncate(string s, int max) => s.Length <= max ? s : s[..(max - 1)] + "…";
+
+    /// <summary>A grid label's text, shortened with "…" if it wouldn't fit its width (11px bold ≈ 6.8px per character).</summary>
+    private static string FitLabel(GridLabel label) => Truncate(label.Text, Math.Max(2, (int)((label.Width - 4) / 6.8)));
 
     private static string Tooltip(Port p)
     {

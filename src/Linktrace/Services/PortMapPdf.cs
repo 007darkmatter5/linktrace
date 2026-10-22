@@ -186,7 +186,7 @@ public class PortMapPdfService(DeviceService devices, PortMapService portMaps)
             {
                 var ruleY = placed.Y + label.Y + cell - 3;
                 gfx.DrawLine(new XPen(PortLine, 0.6), placed.X + label.X, ruleY, placed.X + label.X + label.Width, ruleY);
-                gfx.DrawString(label.Text, labelFont, muted, new XRect(placed.X + label.X, placed.Y + label.Y, label.Width, cell - 3), XStringFormats.Center);
+                gfx.DrawString(Fit(gfx, label.Text, labelFont, label.Width - 2), labelFont, muted, new XRect(placed.X + label.X, placed.Y + label.Y, label.Width, cell - 3), XStringFormats.Center);
             }
 
             foreach (var c in placed.Plate.Cells)

@@ -46,6 +46,7 @@
                 <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditDevice">Edit</MudButton>
                 <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="DuplicateDevice">Duplicate</MudButton>
                 <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.BookmarkAdd" OnClick="SaveAsTemplate">Save as template</MudButton>
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Sync" OnClick="UpdateFromTemplate">Update from template</MudButton>
                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteDevice" title="Delete device" />
             </MudStack>
         }
@@ -377,6 +378,17 @@
         var saved = await Dialogs.OpenAsync<SaveTemplateDialog, DeviceTemplate>("Save as template", new() { { d => d.Device, _device! } });
         if (saved is not null)
             Snackbar.Add($"Saved template '{saved.Name}'. Use it from Add device, or share it from Device templates.", Severity.Success);
+    }
+
+    private async Task UpdateFromTemplate()
+    {
+        var count = await Dialogs.OpenAsync<UpdateFromTemplateDialog, int>("Update from template",
+            new() { { d => d.DeviceId, _device!.Id }, { d => d.DeviceModel, _device.Model } }, MaxWidth.Medium);
+        if (count > 0)
+        {
+            Snackbar.Add($"Updated {count} device(s) from the template", Severity.Success);
+            await Load();
+        }
     }
 
     private async Task DuplicateDevice()

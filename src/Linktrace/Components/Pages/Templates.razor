@@ -111,6 +111,8 @@ else
                 @if (CanEdit)
                 {
                     <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" OnClick="() => NewDevice(context)">New device</MudButton>
+                    <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Sync" OnClick="() => UpdateDevices(context)"
+                               title="Bring existing devices of this model in line with the template">Update devices</MudButton>
                 }
                 <MudIconButton Icon="@Icons.Material.Filled.Download" Size="Size.Small" title="Export this template"
                                OnClick="@(() => Nav.NavigateTo($"api/templates/export?ids={context.Id}", forceLoad: true))" />
@@ -149,6 +151,13 @@ else
         var created = await Dialogs.OpenAsync<DeviceDialog, Device>($"New device from {t.Name}",
             new() { { d => d.Model, new Device() }, { d => d.TemplateId, t.Id } }, MaxWidth.Medium);
         if (created is not null) Nav.NavigateTo($"devices/{created.Id}");
+    }
+
+    private async Task UpdateDevices(DeviceTemplateInfo t)
+    {
+        var count = await Dialogs.OpenAsync<UpdateFromTemplateDialog, int>($"Update devices from {t.Name}",
+            new() { { d => d.TemplateId, t.Id } }, MaxWidth.Medium);
+        if (count > 0) Snackbar.Add($"Updated {count} device(s) from '{t.Name}'", Severity.Success);
     }
 
     private async Task Delete(DeviceTemplateInfo t)

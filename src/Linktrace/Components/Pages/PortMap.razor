@@ -145,7 +145,13 @@
 
             <MudAutocomplete T="Device" @ref="_addBox" ValueChanged="AddDevice" SearchFunc="SearchDevices" Class="mt-3"
                              ToStringFunc="@(d => d?.Name)" Label="Add a device" OpenOnFocus="true" DebounceInterval="200"
-                             ResetValueOnEmptyText="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Add" Margin="Margin.Dense" />
+                             ResetValueOnEmptyText="true" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Add" Margin="Margin.Dense"
+                             MaxItems="null" MaxHeight="360">
+                <ItemTemplate Context="d">
+                    <MudText Typo="Typo.body2">@d.Name</MudText>
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">@Display.Location(d)</MudText>
+                </ItemTemplate>
+            </MudAutocomplete>
             <MudSelect T="int?" Value="null" ValueChanged="AddRack" Label="Add a whole rack" Margin="Margin.Dense">
                 @foreach (var rack in _racks)
                 {

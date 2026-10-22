@@ -261,6 +261,72 @@ namespace Linktrace.Data.Migrations
                     b.ToTable("Devices");
                 });
 
+            modelBuilder.Entity("Linktrace.Data.Entities.DeviceTemplate", b =>
+                {
+                    b.Property<int>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateTime>("CreatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FaceplateNumbering")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("FaceplateRows")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int?>("FaceplateTemplateId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("HeightU")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(30)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Manufacturer")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Model")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Notes")
+                        .HasMaxLength(2000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(256)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedUtc")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("Version")
+                        .IsConcurrencyToken()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("FaceplateTemplateId");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("DeviceTemplates");
+                });
+
             modelBuilder.Entity("Linktrace.Data.Entities.FaceplateTemplate", b =>
                 {
                     b.Property<int>("Id")
@@ -375,6 +441,10 @@ namespace Linktrace.Data.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("INTEGER");
 
+                    b.PrimitiveCollection<string>("Columns")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
                     b.Property<DateTime>("CreatedUtc")
                         .HasColumnType("TEXT");
 
@@ -396,6 +466,10 @@ namespace Linktrace.Data.Migrations
 
                     b.Property<bool>("ShowExternal")
                         .HasColumnType("INTEGER");
+
+                    b.PrimitiveCollection<string>("Spans")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
 
                     b.Property<string>("UpdatedBy")
                         .HasMaxLength(256)
@@ -718,6 +792,54 @@ namespace Linktrace.Data.Migrations
                     b.Navigation("Room");
                 });
 
+            modelBuilder.Entity("Linktrace.Data.Entities.DeviceTemplate", b =>
+                {
+                    b.HasOne("Linktrace.Data.Entities.FaceplateTemplate", "FaceplateTemplate")
+                        .WithMany()
+                        .HasForeignKey("FaceplateTemplateId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.OwnsMany("Linktrace.Data.Entities.TemplatePort", "Ports", b1 =>
+                        {
+                            b1.Property<int>("DeviceTemplateId");
+
+                            b1.Property<int>("__synthesizedOrdinal")
+                                .ValueGeneratedOnAddOrUpdate();
+
+                            b1.Property<string>("Description");
+
+                            b1.Property<string>("Face")
+                                .IsRequired();
+
+                            b1.Property<string>("MediaType")
+                                .IsRequired();
+
+                            b1.Property<string>("Name")
+                                .IsRequired();
+
+                            b1.Property<string>("PairFace");
+
+                            b1.Property<string>("PairName");
+
+                            b1.Property<int>("Position");
+
+                            b1.HasKey("DeviceTemplateId", "__synthesizedOrdinal");
+
+                            b1.ToTable("DeviceTemplates");
+
+                            b1
+                                .ToJson("Ports")
+                                .HasColumnType("TEXT");
+
+                            b1.WithOwner()
+                                .HasForeignKey("DeviceTemplateId");
+                        });
+
+                    b.Navigation("FaceplateTemplate");
+
+                    b.Navigation("Ports");
+                });
+
             modelBuilder.Entity("Linktrace.Data.Entities.FaceplateTemplate", b =>
                 {
                     b.OwnsMany("Linktrace.Data.Entities.FaceplateLabel", "Labels", b1 =>
@@ -763,6 +885,8 @@ namespace Linktrace.Data.Migrations
                                 .IsRequired();
 
                             b1.Property<int>("Row");
+
+                            b1.Property<int?>("Span");
 
                             b1.HasKey("FaceplateTemplateId", "__synthesizedOrdinal");
 

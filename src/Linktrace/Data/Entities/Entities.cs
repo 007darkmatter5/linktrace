@@ -125,6 +125,41 @@ public class FaceplateTemplate : EntityBase
     public List<Device> Devices { get; set; } = [];
 }
 
+/// <summary>
+/// A reusable description of a kind of device (e.g. "Ubiquiti USP PDU Pro"): its details, its ports and
+/// its faceplate layout. New devices can start from one; templates can be exported and imported as files.
+/// </summary>
+public class DeviceTemplate : EntityBase
+{
+    [Required, MaxLength(100)] public string Name { get; set; } = "";
+    [MaxLength(2000)] public string? Notes { get; set; }
+
+    public DeviceKind Kind { get; set; } = DeviceKind.Other;
+    [MaxLength(100)] public string? Manufacturer { get; set; }
+    [MaxLength(100)] public string? Model { get; set; }
+    [Range(1, 60)] public int HeightU { get; set; } = 1;
+    [Range(0, 8)] public int FaceplateRows { get; set; }
+    public PortNumbering FaceplateNumbering { get; set; } = PortNumbering.Auto;
+
+    /// <summary>Hand-built layout new devices get; null = automatic layout.</summary>
+    public int? FaceplateTemplateId { get; set; }
+    public FaceplateTemplate? FaceplateTemplate { get; set; }
+
+    public List<TemplatePort> Ports { get; set; } = [];
+}
+
+/// <summary>A port in a device template. Front/rear pairs refer to each other by name and side.</summary>
+public class TemplatePort
+{
+    public string Name { get; set; } = "";
+    public PortFace Face { get; set; }
+    public MediaType MediaType { get; set; } = MediaType.RJ45;
+    public int Position { get; set; }
+    public string? Description { get; set; }
+    public string? PairName { get; set; }
+    public PortFace? PairFace { get; set; }
+}
+
 /// <summary>A saved port map: which devices to show, top to bottom, and the display options.</summary>
 public class PortMapView : EntityBase
 {
@@ -132,6 +167,16 @@ public class PortMapView : EntityBase
     [MaxLength(2000)] public string? Notes { get; set; }
     /// <summary>Device ids in display order (top first). Deleted devices are skipped when shown.</summary>
     public List<int> DeviceIds { get; set; } = [];
+    /// <summary>
+    /// Column of each device (parallel to <see cref="DeviceIds"/>). 0 starts a new row; 1, 2… sit to the
+    /// right of the device before it in the same row. Empty means one device per row.
+    /// </summary>
+    public List<int> Columns { get; set; } = [];
+    /// <summary>
+    /// How many columns each device covers (parallel to <see cref="DeviceIds"/>). 0 = automatic: the last
+    /// device in a row fills the rest of it, others cover one column. Empty means all automatic.
+    /// </summary>
+    public List<int> Spans { get; set; } = [];
     public bool FollowPassThrough { get; set; } = true;
     public bool ShowExternal { get; set; } = true;
 }
@@ -142,13 +187,17 @@ public static class FaceplateGrid
     public const int MaxRows = 12;
 }
 
-/// <summary>A port placed in a grid cell (0-based column and row).</summary>
+/// <summary>A port placed in a grid cell (0-based column and row), optionally spanning several columns.</summary>
 public class FaceplatePlacement
 {
     public string PortName { get; set; } = "";
     public PortFace Face { get; set; }
     public int Col { get; set; }
     public int Row { get; set; }
+    /// <summary>Columns the port covers, from <see cref="Col"/> rightwards. Null (older layouts) means 1.</summary>
+    public int? Span { get; set; }
+
+    public int Width => Math.Max(1, Span ?? 1);
 }
 
 /// <summary>Text spanning one or more cells in a row, e.g. "WAN" or "SFP+".</summary>
@@ -196,6 +245,20 @@ public enum MediaType
     Console,
     Keystone,
     PunchDown,
+    UsbC,
+    UsbA,
+    /// <summary>US household outlet (NEMA 5-15R).</summary>
+    PowerNema515,
+    /// <summary>IEC C13 outlet (PDUs, UPSes).</summary>
+    PowerC13,
+    /// <summary>IEC C19 outlet (high-current PDU outlets).</summary>
+    PowerC19,
+    /// <summary>IEC C14 inlet (where a power cord plugs into a device).</summary>
+    PowerC14,
+    /// <summary>IEC C20 inlet.</summary>
+    PowerC20,
+    /// <summary>Low-voltage DC power (barrel jack, terminal).</summary>
+    PowerDc,
     Other
 }
 
@@ -235,6 +298,8 @@ public enum CableType
     AOC,
     Coax,
     Console,
+    Usb,
+    Power,
     Other
 }
 

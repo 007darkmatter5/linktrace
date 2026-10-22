@@ -15,7 +15,11 @@ Blazor Server (.NET 10) + MudBlazor + SQLite. Multi-user, runs as a single conta
 - **Cables** join two ports, with label, type, color, length and notes. A port holds one cable, and edits by two people at once can't overwrite each other.
 - **Trace** any port end to end. Patch panel and wall jack front ↔ rear pass-throughs are followed automatically.
 - **Faceplates** draw each device's ports the way the hardware looks: automatically, or laid out by hand on a snap-to-grid editor and shared by every device of the same model.
-- **Port maps** stack devices (or a whole rack) top to bottom and route every cable between them, plus labelled stubs for cables that leave the map. Save and reopen maps.
+- **Port maps** stack devices (or a whole rack) top to bottom, side by side in a grid if you like, and route every cable between them, plus labelled stubs for cables that leave the map. Save and reopen maps, and **export them to PDF** for printing (Letter, Tabloid, A4, A3).
+- **Racks:** put existing devices in a rack by dragging them onto a slot or picking a position; devices can be several U tall.
+- **Connector types** beyond network ports: USB-C/A, power outlets (NEMA 5-15, C13, C19), power inlets (C14, C20) and DC, drawn as their shapes on faceplates.
+- **Bulk port edits:** tick ports and change their side, connector or description together.
+- **Device templates:** save a device (ports, pairs, faceplate layout) as a template, start new devices from it, and share templates as files with other Linktrace installs.
 - **Export / import** everything as one JSON file, to back up or move to another instance.
 - **Roles:** the first account is Admin; new accounts are read-only Viewers until promoted to Editor. Every change is in the change log.
 - Light, dark or match-system theme, saved per user.

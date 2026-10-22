@@ -29,6 +29,7 @@ public sealed class TestDb : IDbContextFactory<ApplicationDbContext>, IAsyncDisp
     public CableService Cables { get; }
     public TraceService Tracer { get; }
     public FaceplateService Faceplates { get; }
+    public DeviceTemplateService Templates { get; }
 
     public TestDb()
     {
@@ -43,6 +44,7 @@ public sealed class TestDb : IDbContextFactory<ApplicationDbContext>, IAsyncDisp
         Cables = new CableService(this, User);
         Tracer = new TraceService(this);
         Faceplates = new FaceplateService(this, User);
+        Templates = new DeviceTemplateService(this, User, Devices);
     }
 
     public ApplicationDbContext CreateDbContext() => new(_options);

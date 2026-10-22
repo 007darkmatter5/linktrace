@@ -35,6 +35,39 @@ public class PortGenerationRequest
     public MediaType RearMediaType { get; set; } = MediaType.PunchDown;
 }
 
+/// <summary>Changes to apply to several ports at once. Null means "leave as is".</summary>
+public class BulkPortChange
+{
+    public PortFace? Face { get; set; }
+    public MediaType? MediaType { get; set; }
+    /// <summary>When true, every selected port's description becomes <see cref="Description"/> (empty clears it).</summary>
+    public bool SetDescription { get; set; }
+    public string? Description { get; set; }
+
+    public bool HasChanges => Face is not null || MediaType is not null || SetDescription;
+}
+
+/// <summary>Put a device in a rack, optionally at a rack position (lowest U it occupies) and with a new height in U.</summary>
+public record RackPlacement(int DeviceId, int? RackUnit, int? HeightU = null);
+
+public static class RackSlots
+{
+    /// <summary>
+    /// The highest free position for a device <paramref name="height"/> U tall, scanning from the top of the
+    /// rack down, or null if it doesn't fit anywhere.
+    /// </summary>
+    public static int? SuggestUnit(int rackHeight, IEnumerable<(int Bottom, int Height)> occupied, int height)
+    {
+        var taken = new HashSet<int>();
+        foreach (var (bottom, h) in occupied)
+            for (var u = bottom; u < bottom + Math.Max(1, h); u++) taken.Add(u);
+        height = Math.Max(1, height);
+        for (var bottom = rackHeight - height + 1; bottom >= 1; bottom--)
+            if (Enumerable.Range(bottom, height).All(u => !taken.Contains(u))) return bottom;
+        return null;
+    }
+}
+
 public class DuplicateRequest
 {
     /// <summary>Name of the (first) copy; further copies count up from it.</summary>
@@ -146,8 +179,9 @@ public class DeviceService(IDbContextFactory<ApplicationDbContext> factory, ICur
 
         e.Name = model.Name.Trim();
         e.Kind = model.Kind;
-        e.Manufacturer = Clean(model.Manufacturer);
-        e.Model = Clean(model.Model);
+        // Reuse the existing spelling when the same name was already used ("ubiquiti" → "Ubiquiti").
+        e.Manufacturer = await ExistingSpellingAsync(ctx, Clean(model.Manufacturer), ctx.Devices.Where(d => d.Id != e.Id).Select(d => d.Manufacturer));
+        e.Model = await ExistingSpellingAsync(ctx, Clean(model.Model), ctx.Devices.Where(d => d.Id != e.Id).Select(d => d.Model));
         e.SerialNumber = Clean(model.SerialNumber);
         e.ManagementAddress = Clean(model.ManagementAddress);
         e.RoomId = model.RoomId;
@@ -170,6 +204,37 @@ public class DeviceService(IDbContextFactory<ApplicationDbContext> factory, ICur
         Audit(ctx, isNew ? "Created" : "Updated", nameof(Device), e.Id, $"Device '{e.Name}'");
         await SaveAsync(ctx);
         return e;
+    }
+
+    /// <summary>Every manufacturer used so far, A–Z, with how many devices each has (for the picker).</summary>
+    public async Task<List<(string Name, int Count)>> ManufacturersAsync()
+    {
+        await using var ctx = await ReadAsync();
+        var rows = await ctx.Devices.Where(d => d.Manufacturer != null)
+            .GroupBy(d => d.Manufacturer!).Select(g => new { g.Key, Count = g.Count() }).ToListAsync();
+        return rows.OrderBy(r => r.Key, StringComparer.OrdinalIgnoreCase).Select(r => (r.Key, r.Count)).ToList();
+    }
+
+    /// <summary>Models used so far, those from <paramref name="manufacturer"/> first, A–Z.</summary>
+    public async Task<List<(string Model, string? Manufacturer)>> ModelsAsync(string? manufacturer)
+    {
+        await using var ctx = await ReadAsync();
+        var rows = await ctx.Devices.Where(d => d.Model != null)
+            .Select(d => new { Model = d.Model!, d.Manufacturer }).Distinct().ToListAsync();
+        var maker = manufacturer?.Trim();
+        return rows
+            .GroupBy(r => r.Model, StringComparer.OrdinalIgnoreCase).Select(g => g.First())
+            .OrderBy(r => string.IsNullOrEmpty(maker) || string.Equals(r.Manufacturer, maker, StringComparison.OrdinalIgnoreCase) ? 0 : 1)
+            .ThenBy(r => r.Model, StringComparer.OrdinalIgnoreCase)
+            .Select(r => (r.Model, r.Manufacturer)).ToList();
+    }
+
+    /// <summary>If <paramref name="value"/> matches an existing value ignoring case, returns the existing spelling.</summary>
+    private static async Task<string?> ExistingSpellingAsync(ApplicationDbContext ctx, string? value, IQueryable<string?> existing)
+    {
+        if (value is null) return null;
+        var lower = value.ToLower();
+        return await existing.Where(v => v != null && v.ToLower() == lower).FirstOrDefaultAsync() ?? value;
     }
 
     /// <summary>Room must exist; rack must be in that room; the rack position must fit and not overlap another device.</summary>
@@ -255,6 +320,87 @@ public class DeviceService(IDbContextFactory<ApplicationDbContext> factory, ICur
         await SaveAsync(ctx);
         await tx.CommitAsync();
         return copies.Select(c => c.Copy).ToList();
+    }
+
+    /// <summary>
+    /// Devices that can be given a place in this rack: ones already in it without a position (listed first),
+    /// then devices at the same site that aren't in it (unracked before racked elsewhere, then by name).
+    /// </summary>
+    public async Task<List<Device>> RackCandidatesAsync(int rackId)
+    {
+        await using var ctx = await ReadAsync();
+        var rack = await ctx.Racks.AsNoTracking().Include(r => r.Room).FirstOrDefaultAsync(r => r.Id == rackId)
+            ?? throw new NotFoundException("Rack");
+        return await ctx.Devices.AsNoTracking()
+            .Include(d => d.Room).Include(d => d.Rack)
+            .Where(d => d.Room.SiteId == rack.Room.SiteId && (d.RackId != rackId || d.RackUnit == null))
+            .OrderBy(d => d.RackId != rackId).ThenBy(d => d.RackId != null).ThenBy(d => d.RoomId != rack.RoomId).ThenBy(d => d.Name)
+            .ToListAsync();
+    }
+
+    /// <summary>
+    /// Moves existing devices into a rack (and into the rack's room), each at its given position or unplaced.
+    /// All or nothing: positions must fit the rack and not overlap each other or anything already there.
+    /// </summary>
+    public async Task<int> PlaceInRackAsync(int rackId, IReadOnlyList<RackPlacement> placements)
+    {
+        if (placements.Count == 0) return 0;
+        await using var ctx = await WriteAsync();
+        var rack = await ctx.Racks.Include(r => r.Room).Include(r => r.Devices).FirstOrDefaultAsync(r => r.Id == rackId)
+            ?? throw new NotFoundException("Rack");
+        var ids = placements.Select(p => p.DeviceId).Distinct().ToList();
+        var devices = await ctx.Devices.Include(d => d.Room).Where(d => ids.Contains(d.Id)).ToListAsync();
+        if (devices.Count != ids.Count) throw new NotFoundException("Device");
+
+        // Apply any new heights first, so the checks below use them.
+        foreach (var p in placements.Where(p => p.HeightU is not null))
+        {
+            if (p.HeightU is < 1 or > 60) throw new LinktraceException("A device's height must be between 1 and 60 U.");
+            devices.Single(x => x.Id == p.DeviceId).HeightU = p.HeightU!.Value;
+        }
+
+        // Check positions against what's already in the rack and against each other.
+        var occupied = rack.Devices.Where(d => !ids.Contains(d.Id) && d.RackUnit is not null)
+            .Select(d => (d.Name, Bottom: d.RackUnit!.Value, Top: d.RackUnit.Value + d.HeightU - 1)).ToList();
+        foreach (var p in placements.Where(p => p.RackUnit is not null))
+        {
+            var d = devices.Single(x => x.Id == p.DeviceId);
+            var (bottom, top) = (p.RackUnit!.Value, p.RackUnit.Value + d.HeightU - 1);
+            if (bottom < 1 || top > rack.HeightU)
+                throw new LinktraceException($"'{d.Name}' ({d.HeightU}U) doesn't fit at U{bottom} in {rack.Name} ({rack.HeightU}U).");
+            var clash = occupied.FirstOrDefault(o => o.Bottom <= top && bottom <= o.Top);
+            if (clash.Name is not null)
+                throw new LinktraceException($"'{d.Name}' at U{bottom} overlaps '{clash.Name}'.");
+            occupied.Add((d.Name, bottom, top));
+        }
+        if (devices.Any(d => d.Room.SiteId != rack.Room.SiteId))
+            throw new LinktraceException("Only devices from the rack's own site can be added.");
+
+        foreach (var d in devices)
+        {
+            var p = placements.First(x => x.DeviceId == d.Id);
+            var from = d.RoomId != rack.RoomId ? $" (moved from {d.Room.Name})" : "";
+            d.RoomId = rack.RoomId;
+            d.RackId = rack.Id;
+            d.RackUnit = p.RackUnit;
+            Audit(ctx, "Updated", nameof(Device), d.Id,
+                $"Device '{d.Name}' ({d.HeightU}U) put in rack '{rack.Name}'{(p.RackUnit is int u ? $" at U{u}" : "")}{from}");
+        }
+        await SaveAsync(ctx);
+        return devices.Count;
+    }
+
+    /// <summary>Takes a device out of its rack; it stays in the same room.</summary>
+    public async Task RemoveFromRackAsync(int deviceId, Guid version)
+    {
+        await using var ctx = await WriteAsync();
+        var d = await ctx.Devices.Include(x => x.Rack).FirstOrDefaultAsync(x => x.Id == deviceId) ?? throw new NotFoundException("Device");
+        ExpectVersion(ctx, d, version);
+        if (d.Rack is null) return;
+        Audit(ctx, "Updated", nameof(Device), d.Id, $"Device '{d.Name}' taken out of rack '{d.Rack.Name}'");
+        d.RackId = null;
+        d.RackUnit = null;
+        await SaveAsync(ctx);
     }
 
     /// <summary>Deletes the device, its ports, and any cables plugged into them.</summary>
@@ -380,6 +526,75 @@ public class DeviceService(IDbContextFactory<ApplicationDbContext> factory, ICur
         await SaveAsync(ctx);
         await tx.CommitAsync();
         return e;
+    }
+
+    /// <summary>
+    /// Applies the same change to several ports of one device. All or nothing: if moving ports to another
+    /// side would give two ports on that side the same name, nothing is changed. A hand-built faceplate used
+    /// only by this device is updated so moved ports keep their place on it.
+    /// </summary>
+    public async Task<int> UpdatePortsAsync(int deviceId, IReadOnlyCollection<int> portIds, BulkPortChange change)
+    {
+        if (portIds.Count == 0 || !change.HasChanges) return 0;
+
+        await using var ctx = await WriteAsync();
+        var device = await ctx.Devices.Include(d => d.Ports).Include(d => d.FaceplateTemplate)
+            .FirstOrDefaultAsync(d => d.Id == deviceId) ?? throw new NotFoundException("Device");
+        var ports = device.Ports.Where(p => portIds.Contains(p.Id)).ToList();
+        if (ports.Count != portIds.Distinct().Count()) throw new NotFoundException("Port");
+
+        var oldKeys = ports.ToDictionary(p => p.Id, p => FaceplateLayout.Key(p.Face, p.Name));
+        if (change.Face is PortFace face)
+        {
+            // Names must stay unique per side: check against ports staying put and among the moved ones.
+            var staying = device.Ports.Where(p => !portIds.Contains(p.Id))
+                .Select(p => FaceplateLayout.Key(p.Face, p.Name)).ToHashSet();
+            var clashes = ports.Where(p => staying.Contains(FaceplateLayout.Key(face, p.Name)))
+                .Select(p => p.Name)
+                .Concat(ports.GroupBy(p => p.Name.Trim().ToLowerInvariant()).Where(g => g.Count() > 1).Select(g => g.First().Name))
+                .Distinct().ToList();
+            if (clashes.Count > 0)
+                throw new LinktraceException(
+                    $"{Display.Face(face) switch { "" => "Standard", var f => char.ToUpper(f[0]) + f[1..] }} already has (or would get two) " +
+                    $"port(s) named {string.Join(", ", clashes.Take(8))}{(clashes.Count > 8 ? "…" : "")}. Rename those first.");
+            foreach (var p in ports) p.Face = face;
+        }
+        if (change.MediaType is MediaType media) foreach (var p in ports) p.MediaType = media;
+        if (change.SetDescription)
+        {
+            var text = Clean(change.Description);
+            foreach (var p in ports) p.Description = text;
+        }
+
+        // Keep a layout that only this device uses in step with the new sides.
+        var layoutNote = "";
+        if (change.Face is not null && device.FaceplateTemplate is { } t)
+        {
+            var users = await ctx.Devices.CountAsync(d => d.FaceplateTemplateId == t.Id);
+            if (users == 1)
+            {
+                var moved = ports.ToDictionary(p => oldKeys[p.Id], p => p.Face);
+                var newPlacements = t.Placements.Select(pl => new FaceplatePlacement
+                {
+                    PortName = pl.PortName, Col = pl.Col, Row = pl.Row, Span = pl.Span,
+                    Face = moved.TryGetValue(FaceplateLayout.Key(pl.Face, pl.PortName), out var nf) ? nf : pl.Face
+                }).ToList();
+                t.Placements = newPlacements;
+                ctx.Entry(t).State = EntityState.Modified;
+            }
+            else layoutNote = $"; layout '{t.Name}' is shared, so moved ports show under \"Not placed\" until it's updated";
+        }
+
+        var what = string.Join(", ", new[]
+        {
+            change.Face is PortFace f2 ? $"side → {(f2 == PortFace.Standard ? "standard" : Display.Face(f2))}" : null,
+            change.MediaType is MediaType m2 ? $"connector → {Display.Media(m2)}" : null,
+            change.SetDescription ? (Clean(change.Description) is { } d2 ? $"description → \"{d2}\"" : "description cleared") : null
+        }.Where(s => s is not null));
+        Audit(ctx, "Updated", nameof(Port), ports.Count == 1 ? ports[0].Id : null,
+            $"{ports.Count} port(s) on '{device.Name}': {what}{layoutNote}");
+        await SaveAsync(ctx);
+        return ports.Count;
     }
 
     public async Task DeletePortsAsync(IEnumerable<int> portIds)

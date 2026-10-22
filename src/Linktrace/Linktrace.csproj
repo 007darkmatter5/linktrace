@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.Web">
+﻿<Project Sdk="Microsoft.NET.Sdk.Web">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -15,6 +15,15 @@
     <PackageReference Include="Microsoft.EntityFrameworkCore.Tools" Version="10.*" />
     <PackageReference Include="MudBlazor" Version="9.11.0" />
     <PackageReference Include="Extensions.MudBlazor.StaticInput" Version="4.*" />
+    <!-- PDFsharp: stay on 6.2.x, the last MIT-licensed line (6.5+ is AGPL and needs a license key). -->
+    <PackageReference Include="PDFsharp" Version="6.2.4" />
+    <!-- Overrides the vulnerable 8.0.1 that PDFsharp 6.2.4 pulls in. -->
+    <PackageReference Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Bundled so PDF export has fonts even in containers with none installed (Apache 2.0, see LICENSE-Roboto.txt). -->
+    <EmbeddedResource Include="Fonts\*.ttf" />
   </ItemGroup>
 
 </Project>

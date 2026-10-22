@@ -1,0 +1,48 @@
+@inherits DialogBase
+@inject DeviceService Devices
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Where <b>@Device.Name</b> sits in <b>@Rack.Name</b> (@Rack.HeightU U). Leave the position empty to keep it in the rack without one.
+        </MudText>
+        <MudGrid Spacing="2">
+            <MudItem xs="6">
+                <MudNumericField T="int?" @bind-Value="_unit" Label="Bottom U" Min="1" Max="Rack.HeightU" Clearable="true" AutoFocus="true"
+                                 HelperText="@(_unit is int u && _height > 1 ? $"Takes U{u}–{u + _height - 1}" : "Lowest unit it occupies")" />
+            </MudItem>
+            <MudItem xs="6">
+                <MudNumericField @bind-Value="_height" Label="Height (U)" Min="1" Max="Rack.HeightU" />
+            </MudItem>
+        </MudGrid>
+        <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.VerticalAlignTop" Class="mt-2"
+                   OnClick="UseHighestFree">Use the highest free slot</MudButton>
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter, EditorRequired] public Device Device { get; set; } = default!;
+    [Parameter, EditorRequired] public Rack Rack { get; set; } = default!;
+
+    private int? _unit;
+    private int _height = 1;
+
+    protected override void OnInitialized()
+    {
+        _unit = Device.RackUnit;
+        _height = Math.Max(1, Device.HeightU);
+    }
+
+    private void UseHighestFree()
+    {
+        var others = Rack.Devices.Where(d => d.Id != Device.Id && d.RackUnit is not null).Select(d => (d.RackUnit!.Value, d.HeightU));
+        _unit = RackSlots.SuggestUnit(Rack.HeightU, others, _height);
+        Error = _unit is null ? $"There's no free {_height}U space left in {Rack.Name}." : null;
+    }
+
+    private Task Save() => SubmitAsync(() => Devices.PlaceInRackAsync(Rack.Id, [new RackPlacement(Device.Id, _unit, _height)]));
+}

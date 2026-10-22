@@ -115,6 +115,8 @@ public abstract class ServiceBase(IDbContextFactory<ApplicationDbContext> factor
     protected static string? Clean(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 }
 
+public enum MediaFamily { Copper, Fiber, Transceiver, Usb, Power, Coax, Console, Other }
+
 public static class Display
 {
     public static string Face(PortFace face) => face switch
@@ -154,6 +156,14 @@ public static class Display
     {
         MediaType.SFPPlus => "SFP+",
         MediaType.PunchDown => "Punch-down",
+        MediaType.UsbC => "USB-C",
+        MediaType.UsbA => "USB-A",
+        MediaType.PowerNema515 => "Outlet (NEMA 5-15)",
+        MediaType.PowerC13 => "Outlet (C13)",
+        MediaType.PowerC19 => "Outlet (C19)",
+        MediaType.PowerC14 => "Power inlet (C14)",
+        MediaType.PowerC20 => "Power inlet (C20)",
+        MediaType.PowerDc => "DC power",
         _ => m.ToString()
     };
 
@@ -162,7 +172,54 @@ public static class Display
         CableType.FiberSingleMode => "Fiber SM",
         CableType.FiberMultiModeOM3 => "Fiber MM OM3",
         CableType.FiberMultiModeOM4 => "Fiber MM OM4",
+        CableType.Power => "Power cord",
+        CableType.Usb => "USB",
         _ => t.ToString()
+    };
+
+    /// <summary>Broad family of a connector, used to warn about cabling unlike ports together.</summary>
+    public static MediaFamily Family(MediaType m) => m switch
+    {
+        MediaType.RJ45 or MediaType.Keystone or MediaType.PunchDown => MediaFamily.Copper,
+        MediaType.LC or MediaType.SC or MediaType.ST or MediaType.MPO => MediaFamily.Fiber,
+        MediaType.SFP or MediaType.SFPPlus or MediaType.SFP28 or MediaType.QSFP => MediaFamily.Transceiver,
+        MediaType.UsbC or MediaType.UsbA => MediaFamily.Usb,
+        MediaType.PowerNema515 or MediaType.PowerC13 or MediaType.PowerC19 or MediaType.PowerC14
+            or MediaType.PowerC20 or MediaType.PowerDc => MediaFamily.Power,
+        MediaType.Coax => MediaFamily.Coax,
+        MediaType.Console => MediaFamily.Console,
+        _ => MediaFamily.Other
+    };
+
+    /// <summary>
+    /// Whether two connectors plausibly cable together. Network ports (copper, fiber, transceiver cages) mix
+    /// freely, since modules and media converters bridge them; USB, power, coax and console only match their own kind.
+    /// </summary>
+    public static bool CanConnect(MediaType a, MediaType b)
+    {
+        MediaFamily[] network = [MediaFamily.Copper, MediaFamily.Fiber, MediaFamily.Transceiver, MediaFamily.Other];
+        var (fa, fb) = (Family(a), Family(b));
+        return fa == fb || (network.Contains(fa) && network.Contains(fb)) || fa == MediaFamily.Other || fb == MediaFamily.Other;
+    }
+
+    /// <summary>The cable type to suggest when connecting a port of this kind.</summary>
+    public static CableType SuggestedCable(MediaType m) => m switch
+    {
+        MediaType.LC or MediaType.SC or MediaType.ST or MediaType.MPO => CableType.FiberMultiModeOM4,
+        MediaType.SFPPlus or MediaType.SFP28 or MediaType.QSFP => CableType.DAC,
+        MediaType.Coax => CableType.Coax,
+        MediaType.Console => CableType.Console,
+        MediaType.UsbC or MediaType.UsbA => CableType.Usb,
+        _ when Family(m) == MediaFamily.Power => CableType.Power,
+        _ => CableType.Cat6
+    };
+
+    /// <summary>A Material icon for connectors that look nothing like a network port (USB, power), else null.</summary>
+    public static string? MediaIcon(MediaType m) => Family(m) switch
+    {
+        MediaFamily.Usb => MudBlazor.Icons.Material.Filled.Usb,
+        MediaFamily.Power => MudBlazor.Icons.Material.Filled.Power,
+        _ => null
     };
 
     public static string KindIcon(DeviceKind kind) => kind switch

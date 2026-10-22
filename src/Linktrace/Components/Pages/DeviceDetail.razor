@@ -31,6 +31,7 @@
             <MudGrid Spacing="2" Class="mt-2">
                 <InfoItem Label="Manufacturer / model" Value="@string.Join(" ", new[] { _device.Manufacturer, _device.Model }.Where(x => x != null))" />
                 <InfoItem Label="Serial" Value="@_device.SerialNumber" />
+                <InfoItem Label="Rack height" Value="@($"{_device.HeightU}U{(_device.Rack is not null && _device.RackUnit is int ru ? (_device.HeightU > 1 ? $" · U{ru}–{ru + _device.HeightU - 1}" : $" · U{ru}") : "")}")" />
                 <InfoItem Label="Management" Value="@_device.ManagementAddress" />
                 <InfoItem Label="Last changed" Value="@($"{_device.UpdatedUtc.ToLocalTime():yyyy-MM-dd HH:mm} by {_device.UpdatedBy}")" />
             </MudGrid>
@@ -44,6 +45,7 @@
             <MudStack Row="true">
                 <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Edit" OnClick="EditDevice">Edit</MudButton>
                 <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.ContentCopy" OnClick="DuplicateDevice">Duplicate</MudButton>
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.BookmarkAdd" OnClick="SaveAsTemplate">Save as template</MudButton>
                 <MudIconButton Icon="@Icons.Material.Filled.Delete" Color="Color.Error" OnClick="DeleteDevice" title="Delete device" />
             </MudStack>
         }
@@ -130,6 +132,20 @@
         }
     </MudStack>
 
+    @if (CanEdit && _checked.Count > 0)
+    {
+        <MudPaper Elevation="0" Class="pa-2 mb-2 d-flex align-center flex-wrap gap-2" Style="background: var(--mud-palette-primary-hover)">
+            <MudText Typo="Typo.body2" Class="mx-2"><b>@_checked.Count</b> port(s) selected</MudText>
+            <MudButton Size="Size.Small" Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.EditNote" OnClick="BulkEdit">
+                Edit @_checked.Count port(s)…
+            </MudButton>
+            <MudButton Size="Size.Small" Variant="Variant.Outlined" Color="Color.Error" StartIcon="@Icons.Material.Filled.Delete"
+                       OnClick="@(() => DeletePorts(SelectedPorts.ToArray()))">Delete</MudButton>
+            <MudSpacer />
+            <MudButton Size="Size.Small" Variant="Variant.Text" OnClick="() => _checked.Clear()">Clear selection</MudButton>
+        </MudPaper>
+    }
+
     @if (_device.Ports.Count == 0)
     {
         <MudAlert Severity="Severity.Info">
@@ -140,6 +156,12 @@
     {
         <MudTable Items="PairRows" Dense="true" Hover="true" Elevation="0" Breakpoint="Breakpoint.Sm">
             <HeaderContent>
+                @if (CanEdit)
+                {
+                    <MudTh Style="width: 40px">
+                        <MudCheckBox T="bool" Value="AllSelected(PairRowPorts)" ValueChanged="on => SetSelected(PairRowPorts, on)" Dense="true" Size="Size.Small" title="Select all shown" />
+                    </MudTh>
+                }
                 <MudTh>Port</MudTh>
                 <MudTh>Description</MudTh>
                 <MudTh>Front side connects to</MudTh>
@@ -147,6 +169,13 @@
                 <MudTh></MudTh>
             </HeaderContent>
             <RowTemplate>
+                @if (CanEdit)
+                {
+                    var rowPorts = context.Rear is null ? new[] { context.Main } : new[] { context.Main, context.Rear };
+                    <MudTd>
+                        <MudCheckBox T="bool" Value="AllSelected(rowPorts)" ValueChanged="on => SetSelected(rowPorts, on)" Dense="true" Size="Size.Small" />
+                    </MudTd>
+                }
                 <MudTd DataLabel="Port"><b>@context.Main.Name</b></MudTd>
                 <MudTd DataLabel="Description">@(context.Main.Description ?? context.Rear?.Description)</MudTd>
                 <MudTd DataLabel="Front">
@@ -182,6 +211,12 @@
     {
         <MudTable Items="FilteredPorts" Dense="true" Hover="true" Elevation="0" Breakpoint="Breakpoint.Sm">
             <HeaderContent>
+                @if (CanEdit)
+                {
+                    <MudTh Style="width: 40px">
+                        <MudCheckBox T="bool" Value="AllSelected(FilteredPorts)" ValueChanged="on => SetSelected(FilteredPorts, on)" Dense="true" Size="Size.Small" title="Select all shown" />
+                    </MudTh>
+                }
                 <MudTh>Port</MudTh>
                 <MudTh>Connector</MudTh>
                 <MudTh>Description</MudTh>
@@ -190,6 +225,13 @@
                 <MudTh></MudTh>
             </HeaderContent>
             <RowTemplate>
+                @if (CanEdit)
+                {
+                    var rowPort = context;
+                    <MudTd>
+                        <MudCheckBox T="bool" Value="_checked.Contains(rowPort.Id)" ValueChanged="on => SetSelected([rowPort], on)" Dense="true" Size="Size.Small" />
+                    </MudTd>
+                }
                 <MudTd DataLabel="Port">
                     <b>@context.Name</b>
                     @if (context.Face != PortFace.Standard)
@@ -233,6 +275,37 @@
     private List<Neighbor> _neighbors = [];
 
     private void SelectPort(Port p) => _selected = _selected?.Id == p.Id ? null : p;
+
+    // ---- Bulk selection (tick boxes in the port tables), by port id so it survives reloads ----
+    private readonly HashSet<int> _checked = [];
+
+    private IEnumerable<Port> SelectedPorts => _device?.Ports.Where(p => _checked.Contains(p.Id)) ?? [];
+    private IEnumerable<Port> PairRowPorts => PairRows.SelectMany(r => r.Rear is null ? new[] { r.Main } : new[] { r.Main, r.Rear });
+
+    private bool AllSelected(IEnumerable<Port> ports)
+    {
+        var list = ports.ToList();
+        return list.Count > 0 && list.All(p => _checked.Contains(p.Id));
+    }
+
+    private void SetSelected(IEnumerable<Port> ports, bool on)
+    {
+        foreach (var p in ports)
+            if (on) _checked.Add(p.Id); else _checked.Remove(p.Id);
+    }
+
+    private async Task BulkEdit()
+    {
+        var ports = SelectedPorts.ToList();
+        if (ports.Count == 0) return;
+        var updated = await Dialogs.OpenAsync<BulkPortDialog, int>($"Edit {ports.Count} port(s)",
+            new() { { d => d.DeviceId, _device!.Id }, { d => d.Ports, ports } });
+        if (updated > 0)
+        {
+            Snackbar.Add($"Updated {updated} port(s)", Severity.Success);
+            await Load();   // selection is kept, in case there's more to change
+        }
+    }
 
     private record PairRow(Port Main, Port? Rear);
 
@@ -286,6 +359,7 @@
             _neighbors = await PortMap.GetNeighborsAsync(_device.Id);
             // Keep the same port selected after a reload, using the fresh copy.
             _selected = _selected is null ? null : _device.Ports.FirstOrDefault(p => p.Id == _selected.Id);
+            _checked.IntersectWith(_device.Ports.Select(p => p.Id)); // forget deleted ports
         }
     }
 
@@ -296,6 +370,13 @@
         copy.FaceplateTemplate = null;
         if (await Dialogs.OpenAsync<DeviceDialog, Device>("Edit device", new() { { d => d.Model, copy } }, MaxWidth.Medium) is not null)
             await Load();
+    }
+
+    private async Task SaveAsTemplate()
+    {
+        var saved = await Dialogs.OpenAsync<SaveTemplateDialog, DeviceTemplate>("Save as template", new() { { d => d.Device, _device! } });
+        if (saved is not null)
+            Snackbar.Add($"Saved template '{saved.Name}'. Use it from Add device, or share it from Device templates.", Severity.Success);
     }
 
     private async Task DuplicateDevice()
@@ -366,8 +447,8 @@
     private async Task DeletePorts(Port[] ports)
     {
         var connected = ports.Count(p => p.CableId != null);
-        var names = string.Join(", ", ports.Select(Display.PortOnly));
-        var msg = $"Delete {names}?" + (connected > 0 ? $" {connected} cable(s) will be disconnected." : "");
+        var names = string.Join(", ", ports.Take(10).Select(Display.PortOnly)) + (ports.Length > 10 ? $" and {ports.Length - 10} more" : "");
+        var msg = $"Delete {(ports.Length > 1 ? $"{ports.Length} ports ({names})" : names)}?" + (connected > 0 ? $" {connected} cable(s) will be disconnected." : "");
         if (!await Dialogs.ConfirmAsync("Delete port", msg)) return;
         if (await Snackbar.RunAsync(() => DeviceSvc.DeletePortsAsync(ports.Select(p => p.Id)), "Deleted")) await Load();
     }

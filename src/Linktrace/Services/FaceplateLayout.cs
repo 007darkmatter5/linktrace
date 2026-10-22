@@ -4,9 +4,9 @@ using Linktrace.Data.Entities;
 namespace Linktrace.Services;
 
 /// <summary>A port's position in the faceplate drawing (top-left corner, in SVG units).</summary>
-public record PortCell(Port Port, double X, double Y, string Label)
+public record PortCell(Port Port, double X, double Y, string Label, double Width = FaceplateLayout.Cell)
 {
-    public double CenterX => X + FaceplateLayout.Cell / 2;
+    public double CenterX => X + Width / 2;
     public double Top => Y;
     public double Bottom => Y + FaceplateLayout.Cell;
 }
@@ -62,7 +62,8 @@ public static partial class FaceplateLayout
         {
             if (pl.Col >= t.Columns || pl.Row >= t.Rows) continue;
             if (!byKey.TryGetValue(Key(pl.Face, pl.PortName), out var port) || !placed.Add(port.Id)) continue;
-            plate.Cells.Add(new PortCell(port, Padding + pl.Col * Pitch, Padding + pl.Row * Pitch, ShortLabel(port.Name)));
+            var span = Math.Min(pl.Width, t.Columns - pl.Col);
+            plate.Cells.Add(new PortCell(port, Padding + pl.Col * Pitch, Padding + pl.Row * Pitch, ShortLabel(port.Name), span * Pitch - Gap));
         }
         foreach (var l in t.Labels.Where(l => l.Col < t.Columns && l.Row < t.Rows))
         {

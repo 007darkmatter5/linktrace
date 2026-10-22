@@ -13,6 +13,10 @@
             <MudChip T="string" OnClick="@(() => Preset("Te1/1/", 4, MediaType.SFPPlus, false))">4× Te1/1/x SFP+</MudChip>
             <MudChip T="string" OnClick="@(() => Preset("eth", 1, MediaType.RJ45, false, start: 0))">eth0</MudChip>
             <MudChip T="string" OnClick="@(() => Preset("", 1, MediaType.Keystone, true))">Wall jack (1 port)</MudChip>
+            <MudChip T="string" Icon="@Icons.Material.Filled.Usb" OnClick="@(() => Preset("usb", 2, MediaType.UsbC, false))">2× USB-C</MudChip>
+            <MudChip T="string" Icon="@Icons.Material.Filled.Power" OnClick="@(() => Preset("outlet", 8, MediaType.PowerNema515, false))">8× outlet (NEMA 5-15)</MudChip>
+            <MudChip T="string" Icon="@Icons.Material.Filled.Power" OnClick="@(() => Preset("outlet", 8, MediaType.PowerC13, false))">8× outlet (C13)</MudChip>
+            <MudChip T="string" Icon="@Icons.Material.Filled.Power" OnClick="@(() => Preset("power", 1, MediaType.PowerC14, false))">Power inlet (C14)</MudChip>
         </MudStack>
 
         <MudForm @ref="Form">

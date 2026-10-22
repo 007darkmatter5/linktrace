@@ -1,0 +1,138 @@
+@inherits DialogBase
+@inject DeviceService Devices
+
+<MudDialog>
+    <DialogContent>
+        @if (_candidates is null)
+        {
+            <MudProgressLinear Indeterminate="true" />
+        }
+        else if (_candidates.Count == 0)
+        {
+            <MudAlert Severity="Severity.Info">
+                Every device at @Rack.Room.Site.Name already has a place in this rack. Use “New device” to create one.
+            </MudAlert>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mb-2">
+                Devices at <b>@Rack.Room.Site.Name</b> that aren't in <b>@Rack.Name</b>. Tick the ones to put in the rack;
+                each gets the highest free position, which you can change or clear (no position).
+            </MudText>
+            <MudTextField @bind-Value="_search" Placeholder="Filter by name, model or room" Immediate="true" Margin="Margin.Dense"
+                          Variant="Variant.Outlined" Adornment="Adornment.Start" AdornmentIcon="@Icons.Material.Filled.Search" Clearable="true" Class="mb-2" />
+
+            <MudSimpleTable Dense="true" Hover="true" Elevation="0" Style="max-height: 55vh; overflow-y: auto">
+                <thead>
+                    <tr><th style="width: 44px"></th><th>Device</th><th>Now in</th><th style="width: 100px">Height (U)</th><th style="width: 130px">Bottom U</th></tr>
+                </thead>
+                <tbody>
+                    @foreach (var d in Filtered)
+                    {
+                        var device = d;
+                        var picked = _picked.ContainsKey(device.Id);
+                        <tr>
+                            <td><MudCheckBox T="bool" Value="picked" ValueChanged="on => Toggle(device, on)" Dense="true" Color="Color.Primary" /></td>
+                            <td>
+                                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="1">
+                                    <MudIcon Icon="@Display.KindIcon(device.Kind)" Size="Size.Small" Color="Color.Primary" />
+                                    <div>
+                                        <div><b>@device.Name</b></div>
+                                        <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                                            @Display.Kind(device.Kind)@(device.Model is null ? "" : $" · {device.Model}") · @HeightOf(device)U
+                                        </MudText>
+                                    </div>
+                                </MudStack>
+                            </td>
+                            <td>
+                                <MudText Typo="Typo.body2">@(device.RackId == Rack.Id ? "This rack, no position yet" : $"{device.Room.Name}{(device.Rack is null ? "" : $" / {device.Rack.Name}")}")</MudText>
+                                @if (picked && (device.RoomId != Rack.RoomId || (device.RackId is not null && device.RackId != Rack.Id)))
+                                {
+                                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-warning-darken)">
+                                        Moves @(device.RackId is not null ? $"out of {device.Rack!.Name}" : "")@(device.RoomId != Rack.RoomId ? $" into {Rack.Room.Name}" : "")
+                                    </MudText>
+                                }
+                            </td>
+                            <td>
+                                @if (picked)
+                                {
+                                    <MudNumericField T="int" Value="HeightOf(device)" ValueChanged="h => SetHeight(device, h)"
+                                                     Min="1" Max="Rack.HeightU" Margin="Margin.Dense" Variant="Variant.Outlined" />
+                                }
+                            </td>
+                            <td>
+                                @if (picked)
+                                {
+                                    <MudNumericField T="int?" Value="_picked[device.Id]" ValueChanged="u => _picked[device.Id] = u"
+                                                     Min="1" Max="Rack.HeightU" Margin="Margin.Dense" Variant="Variant.Outlined"
+                                                     Placeholder="none" Clearable="true" />
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+        }
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy"
+                      SaveText="@(_picked.Count == 0 ? "Add to rack" : $"Add {_picked.Count} to rack")" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter, EditorRequired] public Rack Rack { get; set; } = default!;
+    /// <summary>Preferred position for the first device ticked (e.g. the empty slot that was clicked).</summary>
+    [Parameter] public int? StartUnit { get; set; }
+
+    private List<Device>? _candidates;
+    private readonly Dictionary<int, int?> _picked = [];   // device id → bottom U (null = no position)
+    private readonly Dictionary<int, int> _heights = [];   // device id → height in U, when changed here
+
+    private int HeightOf(Device d) => _heights.TryGetValue(d.Id, out var h) ? h : Math.Max(1, d.HeightU);
+
+    /// <summary>Changes a ticked device's height and moves it to a free spot if it no longer fits where it was.</summary>
+    private void SetHeight(Device d, int height)
+    {
+        _heights[d.Id] = Math.Clamp(height, 1, Rack.HeightU);
+        if (_picked.TryGetValue(d.Id, out var bottom) && bottom is int b)
+        {
+            var top = b + HeightOf(d) - 1;
+            var fits = top <= Rack.HeightU && Occupied(d.Id).All(o => o.Bottom + o.Height - 1 < b || top < o.Bottom);
+            if (!fits) _picked[d.Id] = RackSlots.SuggestUnit(Rack.HeightU, Occupied(d.Id), HeightOf(d));
+        }
+    }
+    private string? _search;
+
+    private IEnumerable<Device> Filtered => string.IsNullOrWhiteSpace(_search)
+        ? _candidates ?? []
+        : (_candidates ?? []).Where(d => new[] { d.Name, d.Model, d.Room.Name, d.Rack?.Name }
+            .Any(s => s?.Contains(_search, StringComparison.OrdinalIgnoreCase) == true));
+
+    protected override async Task OnInitializedAsync() => _candidates = await Devices.RackCandidatesAsync(Rack.Id);
+
+    /// <summary>Positions already used: devices in the rack plus the ones ticked so far.</summary>
+    private IEnumerable<(int Bottom, int Height)> Occupied(int exceptId) =>
+        Rack.Devices.Where(d => d.RackUnit is not null).Select(d => (d.RackUnit!.Value, d.HeightU))
+            .Concat(_picked.Where(p => p.Key != exceptId && p.Value is not null)
+                .Select(p => (p.Value!.Value, HeightOf(_candidates!.First(c => c.Id == p.Key)))));
+
+    private void Toggle(Device device, bool on)
+    {
+        if (!on) { _picked.Remove(device.Id); return; }
+
+        // Use the clicked slot for the first device if it fits there, otherwise the highest free position.
+        int? unit = null;
+        if (StartUnit is int start && _picked.Count == 0 && start + HeightOf(device) - 1 <= Rack.HeightU)
+            unit = RackSlots.SuggestUnit(start + HeightOf(device) - 1, Occupied(device.Id), HeightOf(device)) is int u && u == start ? start : null;
+        unit ??= RackSlots.SuggestUnit(Rack.HeightU, Occupied(device.Id), HeightOf(device));
+        _picked[device.Id] = unit;
+    }
+
+    private Task Save()
+    {
+        if (_picked.Count == 0) { Error = "Tick at least one device."; return Task.CompletedTask; }
+        return SubmitAsync(() => Devices.PlaceInRackAsync(Rack.Id, _picked.Select(p => new RackPlacement(p.Key, p.Value, _heights.TryGetValue(p.Key, out var h) ? h : null)).ToList()));
+    }
+}

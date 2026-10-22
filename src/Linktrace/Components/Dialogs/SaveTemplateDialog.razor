@@ -1,0 +1,49 @@
+@inherits DialogBase
+@inject DeviceTemplateService Templates
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Saves what makes <b>@Device.Name</b> this kind of device, so new ones can start from it:
+            type, manufacturer, model, @Device.HeightU U height, its @Device.Ports.Count port(s) with front/rear pairs, and its faceplate layout@(Device.FaceplateTemplate is { } l ? $" ({l.Name})" : " (automatic)").
+            The name, serial number, address, location and cables aren't included.
+        </MudText>
+        <MudForm @ref="Form">
+            <MudTextField @bind-Value="_name" Label="Template name" Required="true" MaxLength="100" AutoFocus="true"
+                          HelperText="Usually the manufacturer and model, e.g. Ubiquiti USP PDU Pro" />
+        </MudForm>
+        <MudCheckBox @bind-Value="_includeDescriptions" Color="Color.Primary" Dense="true" Class="mt-2">
+            Include port descriptions (e.g. "Uplink", "Console")
+        </MudCheckBox>
+        @if (_existing)
+        {
+            <MudCheckBox @bind-Value="_replace" Color="Color.Warning" Dense="true">
+                Replace the existing template called “@_name.Trim()”
+            </MudCheckBox>
+        }
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" SaveText="Save template" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter, EditorRequired] public Device Device { get; set; } = default!;
+
+    private string _name = "";
+    private bool _includeDescriptions;
+    private bool _replace;
+    private HashSet<string> _taken = [];
+
+    private bool _existing => _taken.Contains(_name.Trim());
+
+    protected override async Task OnInitializedAsync()
+    {
+        var parts = new[] { Device.Manufacturer, Device.Model }.Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
+        _name = parts.Count > 0 ? string.Join(" ", parts) : Device.Name;
+        _taken = (await Templates.GetAllAsync()).Select(t => t.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+    }
+
+    private Task Save() => SubmitAsync(() => Templates.SaveFromDeviceAsync(Device.Id, _name, _includeDescriptions, _replace));
+}

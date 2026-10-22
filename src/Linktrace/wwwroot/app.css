@@ -13,6 +13,14 @@
 .lt-rack-unit { width: 44px; flex: none; font-size: .75rem; color: var(--mud-palette-text-secondary); display: flex; align-items: center; justify-content: center; border-right: 1px solid var(--mud-palette-lines-default); }
 .lt-rack-device { flex: 1; display: flex; align-items: center; gap: 8px; padding: 0 12px; background: var(--mud-palette-primary); color: var(--mud-palette-primary-text); border-radius: 4px; margin: 2px; overflow: hidden; cursor: pointer; }
 .lt-rack-device:hover { filter: brightness(1.1); }
+.lt-rack-empty { flex: 1; display: flex; align-items: center; justify-content: center; margin: 2px; border-radius: 4px; cursor: pointer;
+                 color: var(--mud-palette-text-disabled); opacity: 0; transition: opacity .1s; }
+.lt-rack-slot.drop { background: var(--mud-palette-primary-hover); outline: 2px dashed var(--mud-palette-primary); outline-offset: -2px; }
+.lt-rack-device[draggable="true"] { cursor: grab; }
+.lt-rack-list-row { display: flex; align-items: center; gap: 8px; padding: 4px 4px; border-radius: 6px; }
+.lt-rack-list-row[draggable="true"]:hover { background: var(--mud-palette-action-default-hover); }
+.lt-rack-list-row.unplaced { border: 1px dashed var(--mud-palette-warning); }
+.lt-rack-slot:hover .lt-rack-empty { opacity: 1; background: var(--mud-palette-primary-hover); color: var(--mud-palette-primary); }
 
 /* Faceplate / port map (SVG) */
 .lt-portmap { display: block; font-family: Roboto, sans-serif; }
@@ -43,6 +51,7 @@
 .lt-stack-row { display: flex; align-items: center; gap: 6px; padding: 4px 4px 4px 2px; margin-bottom: 4px; border-radius: 6px; cursor: grab;
                 border: 1px solid var(--mud-palette-lines-default); background: var(--mud-palette-surface); }
 .lt-stack-row:hover { border-color: var(--mud-palette-primary); }
+.lt-stack-row.beside { margin-left: 22px; margin-top: -2px; border-style: dashed; }
 .lt-stack-row.drop { border: 2px dashed var(--mud-palette-primary); background: var(--mud-palette-primary-hover); }
 .lt-stack-handle { color: var(--mud-palette-text-disabled); }
 .lt-stack-name { font-weight: 600; font-size: .875rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -60,6 +69,11 @@
 .lt-port-cell:hover .lt-port { filter: brightness(1.15); stroke-width: 2.5; }
 .lt-port-label { font-size: 10px; fill: var(--mud-palette-text-secondary); pointer-events: none; user-select: none; }
 .lt-port-label.on { fill: #fff; font-weight: 600; }
+.lt-port-glyph { pointer-events: none; }
+.lt-port-glyph .fill { fill: var(--mud-palette-text-secondary); }
+.lt-port-glyph .line { fill: none; stroke: var(--mud-palette-text-secondary); stroke-width: 1.6; }
+.lt-port-glyph.on .fill { fill: #fff; }
+.lt-port-glyph.on .line { stroke: #fff; }
 .lt-link { cursor: pointer; }
 .lt-link-hit { fill: none; stroke: transparent; stroke-width: 12; }
 .lt-link-line { fill: none; stroke-width: 2.5; opacity: .85; }

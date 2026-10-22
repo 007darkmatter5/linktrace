@@ -15,6 +15,7 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
     public DbSet<AuditEntry> AuditEntries => Set<AuditEntry>();
     public DbSet<FaceplateTemplate> FaceplateTemplates => Set<FaceplateTemplate>();
     public DbSet<PortMapView> PortMapViews => Set<PortMapView>();
+    public DbSet<DeviceTemplate> DeviceTemplates => Set<DeviceTemplate>();
 
     protected override void OnModelCreating(ModelBuilder builder)
     {
@@ -70,6 +71,22 @@ public class ApplicationDbContext(DbContextOptions<ApplicationDbContext> options
             // Cell contents are stored as JSON on the template row.
             e.OwnsMany(t => t.Placements, b => b.ToJson());
             e.OwnsMany(t => t.Labels, b => b.ToJson());
+        });
+
+        builder.Entity<DeviceTemplate>(e =>
+        {
+            e.HasIndex(t => t.Name).IsUnique();
+            e.Property(t => t.Kind).HasConversion<string>().HasMaxLength(30);
+            e.Property(t => t.FaceplateNumbering).HasConversion<string>().HasMaxLength(30);
+            e.HasOne(t => t.FaceplateTemplate).WithMany().HasForeignKey(t => t.FaceplateTemplateId).OnDelete(DeleteBehavior.SetNull);
+            // Ports are stored as JSON; enums by name so adding new connector types never shifts stored values.
+            e.OwnsMany(t => t.Ports, b =>
+            {
+                b.ToJson();
+                b.Property(p => p.Face).HasConversion<string>();
+                b.Property(p => p.MediaType).HasConversion<string>();
+                b.Property(p => p.PairFace).HasConversion<string>();
+            });
         });
 
         // DeviceIds is stored as a JSON array on the row.

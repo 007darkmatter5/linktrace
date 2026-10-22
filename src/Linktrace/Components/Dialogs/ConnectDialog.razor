@@ -37,6 +37,13 @@
             </MudGrid>
         </MudForm>
 
+        @if (TargetPort is { } target && !Display.CanConnect(FromPort.MediaType, target.MediaType))
+        {
+            <MudAlert Severity="Severity.Warning" Dense="true" Class="mt-3">
+                @Display.Media(FromPort.MediaType) and @Display.Media(target.MediaType) don't normally connect. You can still save it if that's really how it's cabled.
+            </MudAlert>
+        }
+
         <MudDivider Class="my-4" />
         <CableFields Cable="_cable" />
 
@@ -54,19 +61,14 @@
     private Device? _targetDevice;
     private List<Port>? _targetPorts;
     private int? _targetPortId;
+
+    private Port? TargetPort => _targetPorts?.FirstOrDefault(p => p.Id == _targetPortId);
     private readonly Cable _cable = new();
 
     protected override async Task OnInitializedAsync()
     {
         _cable.Label = await Cables.SuggestLabelAsync();
-        _cable.CableType = FromPort.MediaType switch
-        {
-            MediaType.LC or MediaType.SC or MediaType.ST or MediaType.MPO => CableType.FiberMultiModeOM4,
-            MediaType.SFPPlus or MediaType.SFP28 or MediaType.QSFP => CableType.DAC,
-            MediaType.Coax => CableType.Coax,
-            MediaType.Console => CableType.Console,
-            _ => CableType.Cat6
-        };
+        _cable.CableType = Display.SuggestedCable(FromPort.MediaType);
     }
 
     private async Task<IEnumerable<Device>> SearchDevices(string? text, CancellationToken _)

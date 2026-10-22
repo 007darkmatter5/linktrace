@@ -5,6 +5,7 @@
 @inject PortMapService PortMapSvc
 @inject PortMapViewService Views
 @inject LocationService Locations
+@inject Microsoft.AspNetCore.Components.Server.ProtectedBrowserStorage.ProtectedLocalStorage BrowserStorage
 
 <PageTitle>@(_view?.Name ?? "Port map") · Linktrace</PageTitle>
 
@@ -27,6 +28,17 @@
         }
     </div>
     <MudSpacer />
+    <MudTooltip Text="@(_panelCollapsed ? "Show the devices panel" : "Hide the devices panel to give the map more room")">
+        <MudIconButton Icon="@(_panelCollapsed ? Icons.Material.Filled.ViewSidebar : Icons.Material.Outlined.ViewSidebar)"
+                       Variant="Variant.Outlined" OnClick="TogglePanel" aria-label="Toggle devices panel" />
+    </MudTooltip>
+    <MudMenu Label="Export PDF" StartIcon="@Icons.Material.Filled.PictureAsPdf" Variant="Variant.Outlined" Disabled="_scene is null">
+        <MudText Typo="Typo.caption" Class="px-4 pt-2 d-block" Style="color: var(--mud-palette-text-secondary)">Paper size (landscape)</MudText>
+        @foreach (var paper in Enum.GetValues<PaperSize>())
+        {
+            <MudMenuItem Href="@PdfUrl(paper)" Target="_blank" Icon="@Icons.Material.Filled.Description">@PaperLabel(paper)</MudMenuItem>
+        }
+    </MudMenu>
     <MudMenu Label="Open saved map" StartIcon="@Icons.Material.Filled.FolderOpen" Variant="Variant.Outlined" Disabled="_saved.Count == 0">
         @foreach (var v in _saved)
         {
@@ -54,28 +66,74 @@
 
 <MudGrid Spacing="3">
     @* ---------- Left: device stack ---------- *@
+    @if (!_panelCollapsed)
+    {
     <MudItem xs="12" md="4" lg="3">
         <MudPaper Outlined="true" Class="pa-3">
-            <MudText Typo="Typo.subtitle1">Devices, top to bottom</MudText>
-            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">Drag rows to reorder.</MudText>
+            <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="0">
+                <MudText Typo="Typo.subtitle1" Style="flex: 1">Devices, top to bottom</MudText>
+                <MudIconButton Icon="@Icons.Material.Filled.KeyboardDoubleArrowLeft" Size="Size.Small" OnClick="TogglePanel" title="Hide this panel" />
+            </MudStack>
+            <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                Drag rows to reorder. Use ⋮ to put a device beside another one, in the same row.
+            </MudText>
 
             @* The native handler gives Firefox the drag data it needs; Blazor handles the rest. *@
             <div class="mt-2" ondragstart="event.dataTransfer && event.dataTransfer.setData('text/plain', 'row')">
                 @foreach (var (device, index) in OrderedDevices.Select((d, i) => (d, i)))
                 {
-                    <div class="@($"lt-stack-row {(_dropIndex == index && _dragIndex != index ? "drop" : "")}")" draggable="true"
+                    var beside = _cols[index] > 0;
+                    <div class="@($"lt-stack-row {(beside ? "beside" : "")} {(_dropIndex == index && _dragIndex != index ? "drop" : "")}")" draggable="true"
                          @ondragstart="() => _dragIndex = index" @ondragenter="() => _dropIndex = index"
                          @ondragend="() => { _dragIndex = null; _dropIndex = null; }"
                          @ondragover:preventDefault="true" @ondrop="() => DropAt(index)">
-                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Class="lt-stack-handle" />
+                        @if (beside)
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.SubdirectoryArrowRight" Size="Size.Small" Class="lt-stack-handle" title="Beside the device above" />
+                        }
+                        else
+                        {
+                            <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Class="lt-stack-handle" />
+                        }
                         <MudIcon Icon="@Display.KindIcon(device.Kind)" Size="Size.Small" Color="Color.Primary" />
                         <div style="flex: 1; min-width: 0">
-                            <div class="lt-stack-name">@device.Name</div>
-                            <div class="lt-stack-sub">@Display.Kind(device.Kind)@(device.RackUnit is int u ? $" · U{u}" : "")</div>
+                            <div class="lt-stack-name" title="@device.Name">@device.Name</div>
+                            <div class="lt-stack-sub">
+                                @(beside ? $"Beside {OrderedDevices[index - 1].Name}" : $"{Display.Kind(device.Kind)}{(device.RackUnit is int u ? $" · U{u}" : "")}")@(SpanOf(device.Id) is > 0 and var sp ? $" · spans {sp}" : "")
+                            </div>
                         </div>
                         <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowUp" Size="Size.Small" Disabled="index == 0" OnClick="() => Move(index, -1)" title="Move up" />
                         <MudIconButton Icon="@Icons.Material.Filled.KeyboardArrowDown" Size="Size.Small" Disabled="index == _ids.Count - 1" OnClick="() => Move(index, 1)" title="Move down" />
-                        <MudIconButton Icon="@Icons.Material.Filled.Close" Size="Size.Small" OnClick="() => Remove(index)" title="Remove from map" />
+                        <MudMenu Icon="@Icons.Material.Filled.MoreVert" Size="Size.Small" Dense="true" title="More">
+                            @if (beside)
+                            {
+                                <MudMenuItem Icon="@Icons.Material.Filled.KeyboardReturn" OnClick="() => SetBeside(index, false)">Back to its own row</MudMenuItem>
+                            }
+                            else if (index > 0)
+                            {
+                                <MudMenuItem Icon="@Icons.Material.Filled.East" OnClick="() => SetBeside(index, true)">
+                                    Beside @OrderedDevices[index - 1].Name
+                                </MudMenuItem>
+                            }
+                            <MudDivider />
+                            <MudText Typo="Typo.caption" Class="px-4 pt-2 d-block" Style="color: var(--mud-palette-text-secondary)">Put beside…</MudText>
+                            @foreach (var (other, otherIndex) in OrderedDevices.Select((d, i) => (d, i)).Where(x => x.i != index))
+                            {
+                                <MudMenuItem OnClick="() => PutBeside(index, otherIndex)">@other.Name</MudMenuItem>
+                            }
+                            <MudDivider />
+                            <MudText Typo="Typo.caption" Class="px-4 pt-2 d-block" Style="color: var(--mud-palette-text-secondary)">Width in the grid</MudText>
+                            @foreach (var span in new[] { 0, 1, 2, 3, 4 })
+                            {
+                                var deviceId = device.Id;
+                                var current = SpanOf(deviceId) == span;
+                                <MudMenuItem Icon="@(current ? Icons.Material.Filled.Check : null)" OnClick="() => SetSpan(deviceId, span)">
+                                    @(span == 0 ? "Auto (last in a row fills the rest)" : span == 1 ? "Spans 1 column" : $"Spans {span} columns")
+                                </MudMenuItem>
+                            }
+                            <MudDivider />
+                            <MudMenuItem Icon="@Icons.Material.Filled.Close" OnClick="() => Remove(index)">Remove from map</MudMenuItem>
+                        </MudMenu>
                     </div>
                 }
             </div>
@@ -124,9 +182,16 @@
             </MudPaper>
         }
     </MudItem>
+    }
 
-    @* ---------- Right: the map ---------- *@
-    <MudItem xs="12" md="8" lg="9">
+    @* ---------- Right: the map (full width when the panel is hidden) ---------- *@
+    <MudItem xs="12" md="@(_panelCollapsed ? 12 : 8)" lg="@(_panelCollapsed ? 12 : 9)">
+        @if (_panelCollapsed && _ids.Count > 0)
+        {
+            <MudChip T="string" Size="Size.Small" Icon="@Icons.Material.Filled.KeyboardDoubleArrowRight" OnClick="TogglePanel" Class="mb-2 ml-0">
+                Show devices (@_ids.Count)
+            </MudChip>
+        }
         @if (_loading)
         {
             <MudProgressLinear Indeterminate="true" />
@@ -216,8 +281,21 @@
     [SupplyParameterFromQuery(Name = "view")] public int? ViewId { get; set; }
     [SupplyParameterFromQuery(Name = "d")] public string? DeviceList { get; set; }
 
-    // Current state (what's on screen).
+    // Current state (what's on screen): devices in reading order, and each one's column
+    // (0 = starts a row, 1+ = beside the device before it). The two lists always have the same length.
     private List<int> _ids = [];
+    private List<int> _cols = [];
+    // Columns each device covers, by device id (missing or 0 = automatic). Keyed by id so it follows the device around.
+    private Dictionary<int, int> _spans = [];
+
+    private int SpanOf(int deviceId) => _spans.GetValueOrDefault(deviceId);
+    private List<int> SpansList() => _ids.Select(SpanOf).ToList();
+
+    private void SetSpan(int deviceId, int span)
+    {
+        if (span <= 0) _spans.Remove(deviceId); else _spans[deviceId] = span;
+        Redraw();
+    }
     private bool _viaPanels = true;
     private bool _showExternal = true;
 
@@ -236,11 +314,67 @@
     private int? _dragIndex, _dropIndex;
     private MudAutocomplete<Device> _addBox = default!;
 
+    // Whether the devices panel is hidden; remembered in this browser.
+    private bool _panelCollapsed;
+    private const string PanelKey = "portmap.panelCollapsed";
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender) return;
+        try
+        {
+            var saved = await BrowserStorage.GetAsync<bool>(PanelKey);
+            if (saved.Success && saved.Value != _panelCollapsed)
+            {
+                _panelCollapsed = saved.Value;
+                StateHasChanged();
+            }
+        }
+        catch (Exception)
+        {
+            // Storage unavailable or unreadable (e.g. after a key change): keep the default.
+        }
+    }
+
+    private async Task TogglePanel()
+    {
+        _panelCollapsed = !_panelCollapsed;
+        try { await BrowserStorage.SetAsync(PanelKey, _panelCollapsed); }
+        catch (Exception) { /* not worth bothering anyone about */ }
+    }
+
+    /// <summary>Link to a PDF of the map exactly as it is on screen.</summary>
+    private string PdfUrl(PaperSize paper)
+    {
+        var query = new Dictionary<string, object?>
+        {
+            ["d"] = string.Join(",", _ids),
+            ["c"] = string.Join(",", _cols),
+            ["s"] = string.Join(",", SpansList()),
+            ["via"] = _viaPanels,
+            ["ext"] = _showExternal,
+            ["title"] = _view?.Name ?? "Port map",
+            ["paper"] = paper.ToString()
+        };
+        return Nav.GetUriWithQueryParameters(Nav.ToAbsoluteUri("api/portmap/pdf").ToString(), query);
+    }
+
+    private static string PaperLabel(PaperSize p) => p switch
+    {
+        PaperSize.Letter => "Letter (11 × 8.5 in)",
+        PaperSize.Tabloid => "Tabloid / Ledger (17 × 11 in)",
+        PaperSize.A4 => "A4",
+        _ => "A3"
+    };
+
     private List<Device> OrderedDevices => _ids.Where(_deviceCache.ContainsKey).Select(id => _deviceCache[id]).ToList();
     private List<int> NeighborIds => _neighborIds.Except(_ids).ToList();
 
     private bool IsDirty => _view is not null
-        ? !_ids.SequenceEqual(_view.DeviceIds) || _viaPanels != _view.FollowPassThrough || _showExternal != _view.ShowExternal
+        ? !_ids.SequenceEqual(_view.DeviceIds)
+          || !_cols.SequenceEqual(PortMapLayout.Normalize(_view.Columns, _view.DeviceIds.Count))
+          || !SpansList().SequenceEqual(PortMapLayout.NormalizeSpans(_view.Spans, _view.DeviceIds.Count))
+          || _viaPanels != _view.FollowPassThrough || _showExternal != _view.ShowExternal
         : _ids.Count > 0;
 
     private string Summary
@@ -278,6 +412,9 @@
         if (_view is not null)
         {
             _ids = [.. _view.DeviceIds];
+            _cols = PortMapLayout.Normalize(_view.Columns, _ids.Count);
+            _spans = _ids.Zip(PortMapLayout.NormalizeSpans(_view.Spans, _ids.Count)).Where(p => p.Second > 0)
+                .ToDictionary(p => p.First, p => p.Second);
             _viaPanels = _view.FollowPassThrough;
             _showExternal = _view.ShowExternal;
         }
@@ -286,6 +423,8 @@
             // Links from device and rack pages pass a starting list of devices.
             _ids = (DeviceList ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
                 .Select(s => int.TryParse(s, out var n) ? n : 0).Where(n => n > 0).Distinct().ToList();
+            _cols = _ids.Select(_ => 0).ToList();
+            _spans = [];
         }
         await Reload();
     }
@@ -302,7 +441,7 @@
         foreach (var id in _ids.Where(id => !_deviceCache.ContainsKey(id)).ToList())
         {
             if (await DeviceSvc.GetAsync(id) is { } d) _deviceCache[id] = d;
-            else _ids.Remove(id); // deleted since the map was saved
+            else TakeAt(_ids.IndexOf(id)); // deleted since the map was saved
         }
 
         if (_ids.Count == 0)
@@ -323,18 +462,60 @@
     private void Redraw()
     {
         _scene = _map is null || _ids.Count == 0 ? null
-            : PortMapScene.Build(OrderedDevices, _map.Links, _showExternal ? _map.Externals : []);
+            : PortMapScene.BuildGrid(
+                PortMapLayout.ToRows(OrderedDevices.Select(d => new MapCell(d, SpanOf(d.Id))).ToList(), _cols)
+                    .Select(r => (IReadOnlyList<MapCell>)r).ToList(),
+                _map.Links, _showExternal ? _map.Externals : []);
         _selectedLine = null;
     }
 
     // ---------- Editing the stack ----------
+    // _ids and _cols change together through these helpers so they never drift apart.
+
+    /// <summary>Removes a device. If it started a row, the next device in that row takes over as the row's first.</summary>
+    private (int Id, int Col) TakeAt(int index)
+    {
+        var slot = (_ids[index], _cols[index]);
+        if (_cols[index] == 0 && index + 1 < _ids.Count && _cols[index + 1] > 0) _cols[index + 1] = 0;
+        _ids.RemoveAt(index);
+        _cols.RemoveAt(index);
+        _cols = PortMapLayout.Normalize(_cols, _ids.Count);
+        return slot;
+    }
+
+    private void PutAt(int index, int id, int col)
+    {
+        _ids.Insert(index, id);
+        _cols.Insert(index, col);
+        _cols = PortMapLayout.Normalize(_cols, _ids.Count);
+    }
 
     private async Task AddIds(IEnumerable<int> ids)
     {
         var added = ids.Where(id => !_ids.Contains(id)).Distinct().ToList();
         if (added.Count == 0) return;
-        _ids.AddRange(added);
+        foreach (var id in added) PutAt(_ids.Count, id, 0);
         await Reload();
+    }
+
+    /// <summary>Puts a device in the same row as the one above it, or back on a row of its own.</summary>
+    private void SetBeside(int index, bool beside)
+    {
+        _cols[index] = beside && index > 0 ? 1 : 0;
+        _cols = PortMapLayout.Normalize(_cols, _ids.Count);
+        Redraw();
+    }
+
+    /// <summary>Moves a device to the right-hand end of another device's row.</summary>
+    private void PutBeside(int index, int targetIndex)
+    {
+        var targetId = _ids[targetIndex];
+        var (id, _) = TakeAt(index);
+        var t = _ids.IndexOf(targetId);
+        var end = t;
+        while (end + 1 < _ids.Count && _cols[end + 1] > 0) end++;  // last device in the target's row
+        PutAt(end + 1, id, 1);
+        Redraw();
     }
 
     private async Task<IEnumerable<Device>> SearchDevices(string? text, CancellationToken _)
@@ -356,21 +537,26 @@
 
     private async Task Remove(int index)
     {
-        _ids.RemoveAt(index);
+        var (id, _) = TakeAt(index);
+        _spans.Remove(id);
         await Reload();
     }
 
     private async Task ClearDevices()
     {
         _ids.Clear();
+        _cols.Clear();
+        _spans.Clear();
         await Reload();
     }
 
+    /// <summary>Moves a device one place up or down the list, keeping whether it sits beside its neighbour.</summary>
     private void Move(int index, int delta)
     {
         var target = index + delta;
         if (target < 0 || target >= _ids.Count) return;
-        (_ids[index], _ids[target]) = (_ids[target], _ids[index]);
+        var (id, col) = TakeAt(index);
+        PutAt(target, id, col);
         Redraw();
     }
 
@@ -378,18 +564,19 @@
     {
         if (_dragIndex is int from && from != index)
         {
-            var id = _ids[from];
-            _ids.RemoveAt(from);
-            _ids.Insert(index, id);
+            var (id, col) = TakeAt(from);
+            PutAt(index, id, col);
             Redraw();
         }
         _dragIndex = null;
         _dropIndex = null;
     }
 
+    /// <summary>Orders by rack position, one device per row.</summary>
     private async Task SortByRack()
     {
         _ids = await Views.SortByLocationAsync(_ids);
+        _cols = _ids.Select(_ => 0).ToList();
         Redraw();
     }
 
@@ -405,6 +592,8 @@
         Name = from?.Name ?? "",
         Notes = from?.Notes,
         DeviceIds = [.. _ids],
+        Columns = [.. _cols],
+        Spans = SpansList(),
         FollowPassThrough = _viaPanels,
         ShowExternal = _showExternal
     };
@@ -441,6 +630,8 @@
         var model = Snapshot(_view);
         // Keep the saved device list; only the name and notes change here.
         model.DeviceIds = [.. _view.DeviceIds];
+        model.Columns = [.. _view.Columns];
+        model.Spans = [.. _view.Spans];
         model.FollowPassThrough = _view.FollowPassThrough;
         model.ShowExternal = _view.ShowExternal;
         var saved = await Dialogs.OpenAsync<SavePortMapDialog, PortMapView>("Rename map", new() { { d => d.Model, model } });
@@ -456,6 +647,8 @@
         {
             _view = null;
             _ids.Clear();
+            _cols.Clear();
+            _spans.Clear();
             Go("portmap");
         }
     }

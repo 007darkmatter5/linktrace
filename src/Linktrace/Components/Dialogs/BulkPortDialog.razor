@@ -1,0 +1,63 @@
+@inherits DialogBase
+@inject DeviceService Devices
+
+<MudDialog>
+    <DialogContent>
+        <MudText Typo="Typo.body2" Class="mb-3">
+            Changes apply to all @Ports.Count selected port(s): <b>@Summary</b>. Anything left as “Don't change” stays as it is on each port.
+        </MudText>
+        <MudGrid Spacing="2">
+            <MudItem xs="12" sm="6">
+                <MudSelect T="PortFace?" @bind-Value="_change.Face" Label="Side">
+                    <MudSelectItem T="PortFace?" Value="null">Don't change</MudSelectItem>
+                    <MudSelectItem T="PortFace?" Value="PortFace.Standard">Standard port</MudSelectItem>
+                    <MudSelectItem T="PortFace?" Value="PortFace.Front">Front (patch side)</MudSelectItem>
+                    <MudSelectItem T="PortFace?" Value="PortFace.Rear">Rear (termination side)</MudSelectItem>
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12" sm="6">
+                <MudSelect T="MediaType?" @bind-Value="_change.MediaType" Label="Connector">
+                    <MudSelectItem T="MediaType?" Value="null">Don't change</MudSelectItem>
+                    @foreach (var m in Enum.GetValues<MediaType>())
+                    {
+                        <MudSelectItem T="MediaType?" Value="m">@Display.Media(m)</MudSelectItem>
+                    }
+                </MudSelect>
+            </MudItem>
+            <MudItem xs="12">
+                <MudCheckBox @bind-Value="_change.SetDescription" Color="Color.Primary" Dense="true">Change the description</MudCheckBox>
+                @if (_change.SetDescription)
+                {
+                    <MudTextField @bind-Value="_change.Description" Label="Description" MaxLength="300"
+                                  HelperText="Leave empty to clear the description on all of them" />
+                }
+            </MudItem>
+        </MudGrid>
+        @if (Error is not null) { <MudAlert Severity="Severity.Error" Class="mt-4">@Error</MudAlert> }
+    </DialogContent>
+    <DialogActions>
+        <DialogFooter OnCancel="Cancel" OnSave="Save" Busy="Busy" SaveText="@($"Update {Ports.Count} port(s)")" />
+    </DialogActions>
+</MudDialog>
+
+@code {
+    [Parameter, EditorRequired] public int DeviceId { get; set; }
+    [Parameter, EditorRequired] public List<Port> Ports { get; set; } = [];
+
+    private readonly BulkPortChange _change = new();
+
+    private string Summary
+    {
+        get
+        {
+            var names = Ports.OrderBy(p => p.Position).Select(Display.PortOnly).ToList();
+            return names.Count <= 6 ? string.Join(", ", names) : $"{string.Join(", ", names.Take(5))} … {names[^1]}";
+        }
+    }
+
+    private Task Save()
+    {
+        if (!_change.HasChanges) { Error = "Pick at least one thing to change."; return Task.CompletedTask; }
+        return SubmitAsync(() => Devices.UpdatePortsAsync(DeviceId, Ports.Select(p => p.Id).ToList(), _change));
+    }
+}

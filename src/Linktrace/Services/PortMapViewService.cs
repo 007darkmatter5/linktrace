@@ -4,6 +4,44 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Linktrace.Services;
 
+/// <summary>
+/// Helpers for the port map's grid. A layout is a list of devices in reading order plus a column per device:
+/// column 0 starts a new row, column n &gt; 0 sits to the right of the device before it.
+/// </summary>
+public static class PortMapLayout
+{
+    /// <summary>Makes columns consistent: the first device starts a row, and columns in a row count 0, 1, 2…</summary>
+    public static List<int> Normalize(IReadOnlyList<int> columns, int count)
+    {
+        var result = new List<int>(count);
+        for (var i = 0; i < count; i++)
+        {
+            var wantsBeside = i > 0 && i < columns.Count && columns[i] > 0;
+            result.Add(wantsBeside ? result[i - 1] + 1 : 0);
+        }
+        return result;
+    }
+
+    public const int MaxSpan = 8;
+
+    /// <summary>One span per device, 0 (automatic) to <see cref="MaxSpan"/>.</summary>
+    public static List<int> NormalizeSpans(IReadOnlyList<int> spans, int count) =>
+        Enumerable.Range(0, count).Select(i => i < spans.Count ? Math.Clamp(spans[i], 0, MaxSpan) : 0).ToList();
+
+    /// <summary>Groups items into rows using the column numbers.</summary>
+    public static List<List<T>> ToRows<T>(IReadOnlyList<T> items, IReadOnlyList<int> columns)
+    {
+        var cols = Normalize(columns, items.Count);
+        var rows = new List<List<T>>();
+        for (var i = 0; i < items.Count; i++)
+        {
+            if (cols[i] == 0) rows.Add([]);
+            rows[^1].Add(items[i]);
+        }
+        return rows;
+    }
+}
+
 public record PortMapViewInfo(int Id, string Name, string? Notes, int DeviceCount, DateTime UpdatedUtc, string? UpdatedBy);
 
 /// <summary>Saved port maps (device stack + options).</summary>
@@ -40,7 +78,13 @@ public class PortMapViewService(IDbContextFactory<ApplicationDbContext> factory,
 
         e.Name = model.Name.Trim();
         e.Notes = Clean(model.Notes);
-        e.DeviceIds = model.DeviceIds.Distinct().ToList();
+        // Drop duplicate devices (keeping each device's first slot) and tidy the column numbers.
+        var slots = model.DeviceIds
+            .Select((id, i) => (Id: id, Column: i < model.Columns.Count ? model.Columns[i] : 0, Span: i < model.Spans.Count ? model.Spans[i] : 0))
+            .DistinctBy(s => s.Id).ToList();
+        e.DeviceIds = slots.Select(s => s.Id).ToList();
+        e.Columns = PortMapLayout.Normalize(slots.Select(s => s.Column).ToList(), slots.Count);
+        e.Spans = PortMapLayout.NormalizeSpans(slots.Select(s => s.Span).ToList(), slots.Count);
         e.FollowPassThrough = model.FollowPassThrough;
         e.ShowExternal = model.ShowExternal;
         await SaveAsync(ctx);

@@ -5,18 +5,25 @@ using Linktrace.Services;
 
 namespace Linktrace.Components.Shared;
 
-public record PlacedDevice(Device Device, Faceplate Plate, double X, double Y, double Width)
+/// <summary>A device's position in the drawing. <paramref name="Row"/>/<paramref name="Column"/> are its grid slot;
+/// <paramref name="Span"/> is how many columns it covers (0 = the rest of its row).</summary>
+public record PlacedDevice(Device Device, Faceplate Plate, double X, double Y, double Width, int Row = 0, int Column = 0, int Span = 1)
 {
     public double Height => Plate.Height;
 }
 
+/// <summary>A device in a port map row and how many columns it covers (0 = automatic).</summary>
+public record MapCell(Device Device, int Span = 0);
+
 /// <summary>A drawn connection: its SVG path, color, end points, and the data behind it.</summary>
+/// <param name="Points">The corners of the line before rounding (used for PDF export).</param>
 public record DrawnLink(string Path, string Color, bool Dashed, (double X, double Y) A, (double X, double Y) B,
-    PortLink? Link, ExternalLink? External, string? Label, (double X, double Y) LabelAt);
+    PortLink? Link, ExternalLink? External, string? Label, (double X, double Y) LabelAt,
+    IReadOnlyList<(double X, double Y)> Points);
 
 /// <summary>
-/// Lays out devices stacked top to bottom (like a rack) and routes cables between their ports
-/// so lines never cross a device:
+/// Lays out devices in rows top to bottom (like a rack), optionally with several devices side by side
+/// in a row, and routes cables between their ports so lines never cross a device:
 /// <list type="bullet">
 /// <item>each cable leaves its port from the nearest edge into the horizontal channel above or below the device;</item>
 /// <item>cables between adjacent devices run straight across the channel between them;</item>
@@ -27,6 +34,8 @@ public record DrawnLink(string Path, string Color, bool Dashed, (double X, doubl
 public class PortMapScene
 {
     public const double NameColumn = 170;
+    public const double ColumnGap = 24;
+    public const double MinBodyWidth = 240;
     public const double TrackGap = 7;
     public const double ChannelPad = 10;
     public const double MinInnerChannel = 30;
@@ -49,31 +58,117 @@ public class PortMapScene
 
     public static PortMapScene Single(Device device) => Build([device], [], []);
 
+    /// <summary>One device per row, top to bottom.</summary>
     public static PortMapScene Build(IReadOnlyList<Device> devices, IEnumerable<PortLink> links, IEnumerable<ExternalLink> externals)
+        => BuildRows(devices.Select(d => (IReadOnlyList<Device>)[d]).ToList(), links, externals);
+
+    /// <summary>Rows top to bottom; each row holds one or more devices left to right (all with automatic spans).</summary>
+    public static PortMapScene BuildRows(IReadOnlyList<IReadOnlyList<Device>> rows, IEnumerable<PortLink> links, IEnumerable<ExternalLink> externals)
+        => BuildGrid(rows.Select(r => (IReadOnlyList<MapCell>)r.Select(d => new MapCell(d)).ToList()).ToList(), links, externals);
+
+    /// <summary>
+    /// Lays devices out like a table. Rows go top to bottom and devices left to right; devices in the same
+    /// column line up. A device covers <see cref="MapCell.Span"/> columns; with an automatic span (0) the last
+    /// device in a row fills the rest of the row and any other device covers one column. Only devices that
+    /// cover exactly one column decide how wide that column is, so a wide device spanning several columns
+    /// (or alone on its row) never pushes the other columns apart: if it's wider than its columns, it just
+    /// extends to the right.
+    /// </summary>
+    public static PortMapScene BuildGrid(IReadOnlyList<IReadOnlyList<MapCell>> rows, IEnumerable<PortLink> links, IEnumerable<ExternalLink> externals)
     {
         var scene = new PortMapScene();
+        rows = rows.Where(r => r.Count > 0).ToList();
+
+        // Flatten to a device list, remembering each device's row, starting column and span.
+        var devices = new List<Device>();
+        var deviceRow = new List<int>();
+        var deviceCol = new List<int>();
+        var deviceSpan = new List<int>();        // columns covered (0 = the rest of the row)
+        var deviceExplicit = new List<bool>();   // span chosen by the user rather than automatic
+        for (var r = 0; r < rows.Count; r++)
+        {
+            var col = 0;
+            for (var c = 0; c < rows[r].Count; c++)
+            {
+                var cell = rows[r][c];
+                var last = c == rows[r].Count - 1;
+                var span = cell.Span > 0 ? cell.Span : last ? 0 : 1;
+                devices.Add(cell.Device);
+                deviceRow.Add(r);
+                deviceCol.Add(col);
+                deviceSpan.Add(span);
+                deviceExplicit.Add(cell.Span > 0);
+                col += Math.Max(span, 1);
+            }
+        }
         var plates = devices.Select(d => FaceplateLayout.Build(d, d.Ports)).ToList();
-        var bodyWidth = Math.Max(240, plates.Select(p => p.Width).DefaultIfEmpty(0).Max());
-        var bodyX = NameColumn;
-        var gutterX = bodyX + bodyWidth + GutterPad;
+        double Natural(int i) => Math.Max(MinBodyWidth, plates[i].Width);
+
+        // Columns: as many as any row uses. Only single-column devices set a column's width.
+        var columnCount = Math.Max(1, Enumerable.Range(0, devices.Count).Select(i => deviceCol[i] + Math.Max(deviceSpan[i], 1)).DefaultIfEmpty(1).Max());
+        var colWidth = Enumerable.Range(0, columnCount)
+            .Select(c => Enumerable.Range(0, devices.Count).Where(i => deviceCol[i] == c && deviceSpan[i] == 1).Select(Natural).DefaultIfEmpty(MinBodyWidth).Max())
+            .ToArray();
+        // One device per row (a classic rack view): every box the same width, as wide as the widest.
+        if (rows.All(r => r.Count == 1) && devices.Count > 0) colWidth[0] = Enumerable.Range(0, devices.Count).Select(Natural).Max();
+
+        var colX = new double[columnCount];
+        for (var c = 0; c < columnCount; c++)
+            colX[c] = c == 0 ? NameColumn : colX[c - 1] + colWidth[c - 1] + ColumnGap + NameColumn;
+        double ColumnsRight(int from, int count) => colX[Math.Min(from + count, columnCount) - 1] + colWidth[Math.Min(from + count, columnCount) - 1];
+
+        // Horizontal placement of each device. A device that's wider than its columns pushes only the
+        // devices after it in the same row.
+        var deviceX = new double[devices.Count];
+        var deviceW = new double[devices.Count];
+        double prevRight = double.MinValue;
+        for (var i = 0; i < devices.Count; i++)
+        {
+            if (i > 0 && deviceRow[i] != deviceRow[i - 1]) prevRight = double.MinValue;
+            var x = Math.Max(colX[deviceCol[i]], prevRight == double.MinValue ? double.MinValue : prevRight + ColumnGap + NameColumn);
+            var width = Natural(i);
+            if (rows.All(r => r.Count == 1))
+                width = colWidth[0];
+            else if (deviceExplicit[i] && deviceSpan[i] > 1)
+                width = Math.Max(width, ColumnsRight(deviceCol[i], deviceSpan[i]) - x);  // fill the columns it spans
+            deviceX[i] = x;
+            deviceW[i] = width;
+            prevRight = x + width;
+        }
+        var gutterX = Math.Max(colX[^1] + colWidth[^1], deviceX.Select((x, i) => x + deviceW[i]).DefaultIfEmpty(0).Max()) + GutterPad;
 
         // Which device each port is on.
         var portDevice = new Dictionary<int, int>();
         for (var i = 0; i < plates.Count; i++)
             foreach (var c in plates[i].Cells) portDevice[c.Port.Id] = i;
 
-        // ---- 1. Decide which channel each cable end uses. Channel k is the gap above device k (k = count: below the last). ----
-        int ExitChannel(int portId, int towardDevice)
+        // ---- 1. Decide which channel each cable end uses. Channel k is the gap above row k (k = row count: below the last). ----
+        // A port on the top row of a multi-row faceplate must leave upward, one on the bottom row downward;
+        // any other port (e.g. a single row of ports) can go either way.
+        int? ForcedChannel(int portId)
         {
             var dev = portDevice[portId];
+            var row = deviceRow[dev];
             var plate = plates[dev];
             var cell = plate.Find(portId)!;
             var minY = plate.Cells.Min(c => c.Y);
             var maxY = plate.Cells.Max(c => c.Y);
-            if (minY != maxY && cell.Y == minY) return dev;          // top row: leave upward
-            if (minY != maxY && cell.Y == maxY) return dev + 1;      // bottom row: leave downward
-            return towardDevice < dev ? dev : dev + 1;               // single row: leave toward the other end
+            if (minY != maxY && cell.Y == minY) return row;          // top row of ports: leave upward
+            if (minY != maxY && cell.Y == maxY) return row + 1;      // bottom row of ports: leave downward
+            return null;
         }
+
+        // A port that can go either way joins the gap the other end uses when that gap touches its own row,
+        // so the cable crosses straight over instead of going round the right-hand side. Otherwise it
+        // leaves toward the other end.
+        int FlexibleChannel(int portId, int otherRow, int? otherChannel)
+        {
+            var row = deviceRow[portDevice[portId]];
+            if (otherChannel is int oc && (oc == row || oc == row + 1)) return oc;
+            return otherRow < row ? row : row + 1;
+        }
+
+        int ExitChannel(int portId, int towardRow) => ForcedChannel(portId) ?? FlexibleChannel(portId, towardRow, null);
 
         var routes = new List<Route>();
         var colorIndex = 0;
@@ -81,11 +176,15 @@ public class PortMapScene
         {
             if (!portDevice.TryGetValue(link.PortAId, out var da) || !portDevice.TryGetValue(link.PortBId, out var db)) continue;
             var color = CableColor(link.Cable?.Color) ?? Palette[colorIndex++ % Palette.Length];
+            var forcedA = ForcedChannel(link.PortAId);
+            var forcedB = ForcedChannel(link.PortBId);
+            var channelA = forcedA ?? FlexibleChannel(link.PortAId, deviceRow[db], forcedB);
+            var channelB = forcedB ?? FlexibleChannel(link.PortBId, deviceRow[da], channelA);
             routes.Add(new Route
             {
                 Link = link, Color = color, Dashed = !link.IsDirect,
                 PortA = link.PortAId, PortB = link.PortBId,
-                ChannelA = ExitChannel(link.PortAId, db), ChannelB = ExitChannel(link.PortBId, da)
+                ChannelA = channelA, ChannelB = channelB
             });
         }
         foreach (var ext in externals)
@@ -113,9 +212,13 @@ public class PortMapScene
         var stubX = gutterX + laneCount * LaneGap + (laneCount > 0 ? 8 : 0);
 
         // ---- 3. Horizontal tracks inside each channel. ----
-        var channelCount = devices.Count + 1;
+        var channelCount = rows.Count + 1;
         var segments = Enumerable.Range(0, channelCount).Select(_ => new List<Segment>()).ToList();
-        double PortX(int portId) => bodyX + plates[portDevice[portId]].Find(portId)!.CenterX;
+        double PortX(int portId)
+        {
+            var dev = portDevice[portId];
+            return deviceX[dev] + plates[dev].Find(portId)!.CenterX;
+        }
 
         foreach (var r in routes)
         {
@@ -154,10 +257,17 @@ public class PortMapScene
             channelHeight[c] = Math.Max(isEdge ? MinEdgeChannel : MinInnerChannel, trackCounts[c] * TrackGap + 2 * ChannelPad);
             channelTop[c] = y;
             y += channelHeight[c];
-            if (c < devices.Count)
+            if (c < rows.Count)
             {
-                scene.Devices.Add(new PlacedDevice(devices[c], plates[c], bodyX, y, bodyWidth));
-                y += plates[c].Height;
+                // A row is as tall as its tallest device; devices sit at the top of the row.
+                var rowHeight = 0.0;
+                for (var i = 0; i < devices.Count; i++)
+                {
+                    if (deviceRow[i] != c) continue;
+                    scene.Devices.Add(new PlacedDevice(devices[i], plates[i], deviceX[i], y, deviceW[i], c, deviceCol[i], deviceSpan[i]));
+                    rowHeight = Math.Max(rowHeight, plates[i].Height);
+                }
+                y += rowHeight;
             }
         }
         double TrackY(int channel, int track) =>
@@ -167,7 +277,7 @@ public class PortMapScene
         {
             var d = scene.Devices[portDevice[portId]];
             var cell = d.Plate.Find(portId)!;
-            var up = channel == portDevice[portId];
+            var up = channel == d.Row;
             return (d.X + cell.CenterX, d.Y + (up ? cell.Top : cell.Bottom));
         }
 
@@ -183,13 +293,14 @@ public class PortMapScene
             {
                 var label = $"→ {ext.FarText}" + (ext.CableCount > 1 ? $" ({ext.CableCount} cables)" : "");
                 maxLabel = Math.Max(maxLabel, label.Length * 6.4);
-                scene.Lines.Add(new DrawnLink(Rounded([a, (a.X, ya), (stubX, ya)]), r.Color, r.Dashed, a, (stubX, ya),
-                    null, ext, label, (stubX + 6, ya + 4)));
+                List<(double X, double Y)> stub = [a, (a.X, ya), (stubX, ya)];
+                scene.Lines.Add(new DrawnLink(Rounded(stub), r.Color, r.Dashed, a, (stubX, ya),
+                    null, ext, label, (stubX + 6, ya + 4), stub));
                 continue;
             }
 
             var b = PortEdge(r.PortB, r.ChannelB);
-            List<(double, double)> pts;
+            List<(double X, double Y)> pts;
             if (r.ChannelA == r.ChannelB)
                 pts = [a, (a.X, ya), (b.X, ya), b];
             else
@@ -199,7 +310,7 @@ public class PortMapScene
                 var lx = LaneX(r.Lane);
                 pts = [a, (a.X, ya), (lx, ya), (lx, yb), (b.X, yb), b];
             }
-            scene.Lines.Add(new DrawnLink(Rounded(pts), r.Color, r.Dashed, a, b, r.Link, null, null, default));
+            scene.Lines.Add(new DrawnLink(Rounded(pts), r.Color, r.Dashed, a, b, r.Link, null, null, default, pts));
         }
 
         scene.Width = Math.Max(stubX + (maxLabel > 0 ? maxLabel + 12 : 0), gutterX) + 4;

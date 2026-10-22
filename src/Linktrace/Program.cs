@@ -71,6 +71,8 @@ builder.Services.AddScoped<FaceplateService>();
 builder.Services.AddScoped<PortMapViewService>();
 builder.Services.AddScoped<TransferService>();
 builder.Services.AddScoped<UserPreferenceService>();
+builder.Services.AddScoped<PortMapPdfService>();
+builder.Services.AddScoped<DeviceTemplateService>();
 builder.Services.AddScoped<SearchService>();
 builder.Services.AddScoped<AuditService>();
 builder.Services.AddScoped<UserAdminService>();
@@ -112,6 +114,43 @@ app.MapGet("/api/export", async (HttpContext http, TransferService transfer) =>
     var now = DateTime.UtcNow;
     var json = await transfer.ExportJsonAsync(http.User.Identity?.Name);
     return Results.File(json, "application/json", TransferService.FileName(now));
+}).RequireAuthorization();
+
+// Printable PDF of a port map, as currently laid out on screen (saved or not).
+//   /api/portmap/pdf?d=1,2,3&c=0,1,0&s=0,0,2&via=true&ext=true&title=Edge&paper=Letter
+app.MapGet("/api/portmap/pdf", async (HttpContext http, PortMapPdfService pdf,
+    string? d, string? c, string? s, bool? via, bool? ext, string? title, PaperSize? paper) =>
+{
+    static List<int> Ints(string? csv) => (csv ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
+        .Select(s => int.TryParse(s, out var n) ? n : -1).Where(n => n >= 0).ToList();
+
+    var name = string.IsNullOrWhiteSpace(title) ? "Port map" : title.Trim();
+    try
+    {
+        var bytes = await pdf.RenderAsync(new PortMapPdfRequest(name, Ints(d).Where(id => id > 0).ToList(), Ints(c),
+            via ?? true, ext ?? true, paper ?? PaperSize.Letter, http.User.Identity?.Name, Ints(s)));
+        // "inline" opens it in the browser's PDF viewer (print or save from there), with a sensible name if saved.
+        var disposition = new Microsoft.Net.Http.Headers.ContentDispositionHeaderValue("inline");
+        disposition.SetHttpFileName(PortMapPdfService.FileName(name));
+        http.Response.Headers.ContentDisposition = disposition.ToString();
+        return Results.File(bytes, "application/pdf");
+    }
+    catch (LinktraceException ex)
+    {
+        return Results.BadRequest(ex.Message);
+    }
+}).RequireAuthorization();
+
+// Download device templates as a shareable file: /api/templates/export?ids=1,2 (no ids = all of them).
+app.MapGet("/api/templates/export", async (HttpContext http, DeviceTemplateService templates, string? ids) =>
+{
+    var wanted = (ids ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries)
+        .Select(s => int.TryParse(s, out var n) ? n : 0).Where(n => n > 0).ToList();
+    var all = await templates.GetAllAsync();
+    var chosen = wanted.Count == 0 ? all : all.Where(t => wanted.Contains(t.Id)).ToList();
+    if (chosen.Count == 0) return Results.NotFound("No templates to export.");
+    var json = await templates.ExportJsonAsync(chosen.Select(t => t.Id).ToList(), http.User.Identity?.Name);
+    return Results.File(json, "application/json", DeviceTemplateService.FileName(chosen));
 }).RequireAuthorization();
 
 // Add additional endpoints required by the Identity /Account Razor components.

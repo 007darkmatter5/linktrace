@@ -9,8 +9,8 @@
             var device = placed.Device;
             <g class="lt-device-name" @onclick="() => OnDeviceClick.InvokeAsync(device)">
                 <title>@($"{device.Name} · {Display.Kind(device.Kind)}")</title>
-                <text x="0" y="@F(placed.Y + placed.Height / 2 - 2)" class="lt-device-title">@Truncate(device.Name, 20)</text>
-                <text x="0" y="@F(placed.Y + placed.Height / 2 + 13)" class="lt-device-kind">@Display.Kind(device.Kind)@(device.RackUnit is int u ? $" · U{u}" : "")</text>
+                <text x="@F(placed.X - NameColumn)" y="@F(placed.Y + placed.Height / 2 - 2)" class="lt-device-title">@Truncate(device.Name, 20)</text>
+                <text x="@F(placed.X - NameColumn)" y="@F(placed.Y + placed.Height / 2 + 13)" class="lt-device-kind">@Display.Kind(device.Kind)@(device.RackUnit is int u ? $" · U{u}" : "")</text>
             </g>
             <g transform="translate(@F(placed.X) @F(placed.Y))">
                 <rect x="0" y="0" width="@F(placed.Width)" height="@F(placed.Height)" rx="5" class="lt-device-body" />
@@ -32,9 +32,31 @@
                     var port = cell.Port;
                     <g class="lt-port-cell" @onclick="() => OnPortClick.InvokeAsync(port)">
                         <title>@Tooltip(port)</title>
-                        <rect x="@F(cell.X)" y="@F(cell.Y)" width="@F(FaceplateLayout.Cell)" height="@F(FaceplateLayout.Cell)" rx="4" class="@PortClasses(port)" />
-                        <text x="@F(cell.CenterX)" y="@F(cell.Y + FaceplateLayout.Cell / 2 + 4)" text-anchor="middle"
-                              class="@(port.CableId != null ? "lt-port-label on" : "lt-port-label")">@cell.Label</text>
+                        <rect x="@F(cell.X)" y="@F(cell.Y)" width="@F(cell.Width)" height="@F(FaceplateLayout.Cell)" rx="4" class="@PortClasses(port)" />
+                        @if (PortGlyphs.For(port.MediaType) is { } glyph)
+                        {
+                            @* USB and power connectors are drawn as their shape instead of a number. *@
+                            <g class="@(port.CableId != null ? "lt-port-glyph on" : "lt-port-glyph")" transform="translate(@F(cell.CenterX - FaceplateLayout.Cell / 2) @F(cell.Y))">
+                                @foreach (var s in glyph)
+                                {
+                                    if (s.Kind == GlyphShapeKind.Circle)
+                                    {
+                                        <circle cx="@F(s.X)" cy="@F(s.Y)" r="@F(s.R)" class="@(s.Filled ? "fill" : "line")" />
+                                    }
+                                    else
+                                    {
+                                        <rect x="@F(s.X)" y="@F(s.Y)" width="@F(s.W)" height="@F(s.H)" rx="@F(s.R)" class="@(s.Filled ? "fill" : "line")" />
+                                    }
+                                }
+                            </g>
+                        }
+                        else
+                        {
+                            <g>
+                                <text x="@F(cell.CenterX)" y="@F(cell.Y + FaceplateLayout.Cell / 2 + 4)" text-anchor="middle"
+                                      class="@(port.CableId != null ? "lt-port-label on" : "lt-port-label")">@cell.Label</text>
+                            </g>
+                        }
                     </g>
                 }
             </g>

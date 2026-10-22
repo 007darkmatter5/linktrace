@@ -62,7 +62,7 @@ public class FaceplateService(IDbContextFactory<ApplicationDbContext> factory, I
         t.Model = Clean(model.Model);
         t.Columns = model.Columns;
         t.Rows = model.Rows;
-        t.Placements = model.Placements.Select(p => new FaceplatePlacement { PortName = p.PortName.Trim(), Face = p.Face, Col = p.Col, Row = p.Row }).ToList();
+        t.Placements = model.Placements.Select(p => new FaceplatePlacement { PortName = p.PortName.Trim(), Face = p.Face, Col = p.Col, Row = p.Row, Span = p.Width > 1 ? p.Width : null }).ToList();
         t.Labels = model.Labels.Select(l => new FaceplateLabel { Text = l.Text.Trim(), Col = l.Col, Row = l.Row, Span = l.Span }).ToList();
         // Owned JSON collections were replaced wholesale; make sure the row is saved with a new version.
         if (!isNew) ctx.Entry(t).State = EntityState.Modified;
@@ -134,7 +134,7 @@ public class FaceplateService(IDbContextFactory<ApplicationDbContext> factory, I
         var ports = new HashSet<string>();
         foreach (var p in t.Placements)
         {
-            Take(p.Col, p.Row, $"Port {p.PortName}");
+            for (var c = p.Col; c < p.Col + p.Width; c++) Take(c, p.Row, $"Port {p.PortName}");
             if (!ports.Add(FaceplateLayout.Key(p.Face, p.PortName)))
                 throw new LinktraceException($"Port {p.PortName} is placed twice.");
         }

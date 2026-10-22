@@ -72,11 +72,11 @@
                     {
                         var port = PortFor(pl);
                         <div class="@($"lt-fp-port {(pl.Face == PortFace.Rear ? "rear" : "")} {(IsSelected(pl) ? "selected" : "")}")" draggable="true"
-                             style="@($"grid-column: {pl.Col + 1}; grid-row: {pl.Row + 1}; {(port is null ? "opacity: .4" : "")}")"
+                             style="@($"grid-column: {pl.Col + 1} / span {pl.Width}; grid-row: {pl.Row + 1}; width: auto; {(port is null ? "opacity: .4" : "")}")"
                              title="@(port is null ? $"{pl.PortName} (no longer on this device)" : $"{Display.PortOnly(port)} · column {pl.Col + 1}, row {pl.Row + 1}")"
                              @onclick="() => PlacedClick(pl)" @ondragstart="() => _drag = (object?)port ?? pl"
                              @ondragover:preventDefault="true" @ondrop="() => Drop(pl.Col, pl.Row)">
-                            @FaceplateLayout.ShortLabel(pl.PortName)
+                            @if (port is not null && Display.MediaIcon(port.MediaType) is { } pi) { <MudIcon Icon="@pi" Style="font-size: 14px" /> }@FaceplateLayout.ShortLabel(pl.PortName)
                         </div>
                     }
                 </div>
@@ -91,6 +91,17 @@
                     <MudNumericField T="int" Value="selLabel.Span" ValueChanged="s => SetSpan(selLabel, s)" Label="Cells wide" Min="1" Max="_working.Columns"
                                      Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px" />
                     <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">Drag it, or click a cell, to move it.</MudText>
+                </MudStack>
+            }
+            else if (SelectedPlacement is { } selPort)
+            {
+                <MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Spacing="2" Class="mt-3">
+                    <MudText Typo="Typo.body2"><b>Port @selPort.PortName</b>@(selPort.Face == PortFace.Standard ? "" : $" ({Display.Face(selPort.Face)})")</MudText>
+                    <MudNumericField T="int" Value="selPort.Width" ValueChanged="s => SetPortSpan(selPort, s)" Label="Cells wide" Min="1" Max="_working.Columns - selPort.Col"
+                                     Variant="Variant.Outlined" Margin="Margin.Dense" Style="width: 120px" />
+                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">
+                        Wider ports grow to the right, for big connectors like power. Click a cell, or drag, to move it.
+                    </MudText>
                 </MudStack>
             }
             else if (_selectedCell is { } cell)
@@ -136,7 +147,7 @@
                         @foreach (var p in group)
                         {
                             <span class="@($"lt-fp-chip {(p.Face == PortFace.Rear ? "rear" : "")} {(_selected == p ? "selected" : "")}")" draggable="true"
-                                  title="@Display.PortOnly(p)" @onclick="() => Select(p)" @ondragstart="() => _drag = p">@FaceplateLayout.ShortLabel(p.Name)</span>
+                                  title="@Display.PortOnly(p)" @onclick="() => Select(p)" @ondragstart="() => _drag = p">@if (Display.MediaIcon(p.MediaType) is { } ci) { <MudIcon Icon="@ci" Style="font-size: 14px" /> }@FaceplateLayout.ShortLabel(p.Name)</span>
                         }
                     </div>
                 </div>
@@ -243,7 +254,7 @@
     private static FaceplateTemplate Copy(FaceplateTemplate t) => new()
     {
         Id = t.Id, Version = t.Version, Name = t.Name, Model = t.Model, Columns = t.Columns, Rows = t.Rows,
-        Placements = t.Placements.Select(p => new FaceplatePlacement { PortName = p.PortName, Face = p.Face, Col = p.Col, Row = p.Row }).ToList(),
+        Placements = t.Placements.Select(p => new FaceplatePlacement { PortName = p.PortName, Face = p.Face, Col = p.Col, Row = p.Row, Span = p.Span }).ToList(),
         Labels = t.Labels.Select(l => new FaceplateLabel { Text = l.Text, Col = l.Col, Row = l.Row, Span = l.Span }).ToList()
     };
 
@@ -261,7 +272,30 @@
         .GroupBy(p => FaceplateLayout.Title(p.Face, FaceplateLayout.Split(p.Name).Prefix))
         .Select(g => g.OrderBy(p => FaceplateLayout.Split(p.Name).Number ?? int.MaxValue).ThenBy(p => p.Position).GroupBy(_ => g.Key).First());
 
-    private FaceplatePlacement? PortAt(int col, int row) => _working!.Placements.FirstOrDefault(p => p.Col == col && p.Row == row);
+    /// <summary>The port covering a cell (a wide port covers several cells in its row).</summary>
+    private FaceplatePlacement? PortAt(int col, int row, FaceplatePlacement? except = null) =>
+        _working!.Placements.FirstOrDefault(p => p != except && p.Row == row && col >= p.Col && col < p.Col + p.Width);
+
+    /// <summary>Whether a port <paramref name="width"/> cells wide fits at (col, row), ignoring the ports given.</summary>
+    private bool Fits(int col, int row, int width, params FaceplatePlacement?[] ignore)
+    {
+        if (col < 0 || row < 0 || col + width > _working!.Columns || row >= _working.Rows) return false;
+        for (var c = col; c < col + width; c++)
+        {
+            if (LabelAt(c, row) is not null) return false;
+            var p = PortAt(c, row);
+            if (p is not null && !ignore.Contains(p)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>The placement for whatever port is selected (from the grid or the list), if it's on the grid.</summary>
+    private FaceplatePlacement? SelectedPlacement => _selected switch
+    {
+        Port p => PlacementOf(p),
+        FaceplatePlacement pl => pl,
+        _ => null
+    };
 
     private FaceplateLabel? LabelAt(int col, int row, FaceplateLabel? except = null) =>
         _working!.Labels.FirstOrDefault(l => l != except && l.Row == row && col >= l.Col && col < l.Col + l.Span);
@@ -335,30 +369,60 @@
 
     // ---- Editing (everything snaps to whole cells) ----
 
-    /// <summary>Puts a port in a cell. If another port is there, the two swap (or the other goes back to the list).</summary>
+    /// <summary>
+    /// Puts a port in a cell. A port from the list replaces whatever port is there (that one goes back to the
+    /// list); a port already on the grid swaps places with it. Wide ports must fit in full.
+    /// </summary>
     private bool Place(Port p, int col, int row)
     {
         if (LabelAt(col, row) is not null) { Snackbar.Add("That cell has a label. Move or remove the label first.", Severity.Warning); return false; }
-        var existing = PlacementOf(p);
-        var occupant = PortAt(col, row);
-        if (occupant == existing && existing is not null) return true;
+        if (PlacementOf(p) is { } existing) return MovePlacement(existing, col, row);
 
-        if (occupant is not null)
-        {
-            if (existing is not null) { occupant.Col = existing.Col; occupant.Row = existing.Row; }
-            else _working!.Placements.Remove(occupant);
-        }
-        if (existing is not null) { existing.Col = col; existing.Row = row; }
-        else _working!.Placements.Add(new FaceplatePlacement { PortName = p.Name, Face = p.Face, Col = col, Row = row });
+        var occupant = PortAt(col, row);
+        if (!Fits(col, row, 1, occupant)) { Snackbar.Add("It doesn't fit there.", Severity.Warning); return false; }
+        if (occupant is not null) _working!.Placements.Remove(occupant);
+        _working!.Placements.Add(new FaceplatePlacement { PortName = p.Name, Face = p.Face, Col = col, Row = row });
         return true;
     }
 
-    private void MovePlacement(FaceplatePlacement pl, int col, int row)
+    /// <summary>Moves a placed port. Dropping it on another port swaps the two, if both fit in each other's spot.</summary>
+    private bool MovePlacement(FaceplatePlacement pl, int col, int row)
     {
-        if (LabelAt(col, row) is not null) { Snackbar.Add("That cell has a label.", Severity.Warning); return; }
-        if (PortAt(col, row) is { } occupant && occupant != pl) { occupant.Col = pl.Col; occupant.Row = pl.Row; }
-        pl.Col = col;
-        pl.Row = row;
+        if (LabelAt(col, row) is not null) { Snackbar.Add("That cell has a label.", Severity.Warning); return false; }
+        var occupant = PortAt(col, row, except: pl);
+        if (occupant is null)
+        {
+            if (!Fits(col, row, pl.Width, pl))
+            {
+                Snackbar.Add(pl.Width > 1 ? $"It's {pl.Width} cells wide and doesn't fit there." : "It doesn't fit there.", Severity.Warning);
+                return false;
+            }
+            (pl.Col, pl.Row) = (col, row);
+            return true;
+        }
+
+        // Swap: each goes where the other started.
+        var (ac, ar, bc, br) = (occupant.Col, occupant.Row, pl.Col, pl.Row);
+        var overlapAfter = ar == br && ac < bc + occupant.Width && bc < ac + pl.Width;
+        if (!Fits(ac, ar, pl.Width, pl, occupant) || !Fits(bc, br, occupant.Width, pl, occupant) || overlapAfter)
+        {
+            Snackbar.Add("Those two can't swap; one of them is too wide for the other's spot.", Severity.Warning);
+            return false;
+        }
+        (pl.Col, pl.Row, occupant.Col, occupant.Row) = (ac, ar, bc, br);
+        return true;
+    }
+
+    /// <summary>Makes a placed port cover more or fewer cells, growing to the right.</summary>
+    private void SetPortSpan(FaceplatePlacement pl, int span)
+    {
+        span = Math.Clamp(span, 1, _working!.Columns - pl.Col);
+        if (!Fits(pl.Col, pl.Row, span, pl))
+        {
+            Snackbar.Add("Can't widen it over other items. Make room to its right first.", Severity.Warning);
+            return;
+        }
+        pl.Span = span > 1 ? span : null;
     }
 
     private void MoveLabel(FaceplateLabel label, int col, int row)
@@ -461,6 +525,7 @@
         var dropped = w.Placements.RemoveAll(p => p.Col >= cols || p.Row >= rows);
         w.Labels.RemoveAll(l => l.Col >= cols || l.Row >= rows);
         foreach (var l in w.Labels) l.Span = Math.Min(l.Span, cols - l.Col);
+        foreach (var p in w.Placements.Where(p => p.Col + p.Width > cols)) p.Span = cols - p.Col > 1 ? cols - p.Col : null;
         w.Columns = cols;
         w.Rows = rows;
         if (_selectedCell is { } c && (c.Col >= cols || c.Row >= rows)) _selectedCell = null;

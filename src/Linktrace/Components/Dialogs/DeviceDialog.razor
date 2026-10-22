@@ -2,6 +2,7 @@
 @inject LocationService Locations
 @inject DeviceService Devices
 @inject FaceplateService Faceplates
+@inject DeviceTemplateService DeviceTemplates
 
 <MudDialog>
     <DialogContent>
@@ -17,6 +18,19 @@
         {
             <MudForm @ref="Form">
                 <MudGrid Spacing="2">
+                    @if (Model.Id == 0 && _deviceTemplates.Count > 0)
+                    {
+                        <MudItem xs="12">
+                            <MudSelect T="int?" Value="_templateId" ValueChanged="UseTemplate" Label="Start from a template (optional)"
+                                       Clearable="true" Variant="Variant.Outlined" Margin="Margin.Dense"
+                                       HelperText="@(SelectedTemplate is { } st ? $"Adds {st.PortCount} port(s): {st.PortSummary}{(st.LayoutName is null ? "" : $" · layout {st.LayoutName}")}" : "Fills in the details below and adds the template's ports and layout")">
+                                @foreach (var t in _deviceTemplates)
+                                {
+                                    <MudSelectItem T="int?" Value="t.Id">@t.Name</MudSelectItem>
+                                }
+                            </MudSelect>
+                        </MudItem>
+                    }
                     <MudItem xs="12" sm="7">
                         <MudTextField @bind-Value="Model.Name" Label="Name" Required="true" MaxLength="100" AutoFocus="true" />
                     </MudItem>
@@ -29,10 +43,23 @@
                         </MudSelect>
                     </MudItem>
                     <MudItem xs="12" sm="6">
-                        <MudTextField @bind-Value="Model.Manufacturer" Label="Manufacturer" MaxLength="100" />
+                        <MudAutocomplete T="string" @bind-Value="Model.Manufacturer" Label="Manufacturer" MaxLength="100"
+                                         SearchFunc="SearchManufacturers" OpenOnFocus="true" CoerceText="false" CoerceValue="true"
+                                         ResetValueOnEmptyText="true" Clearable="true" MaxItems="null"
+                                         HelperText="Pick one already in use, or type a new one">
+                            <ItemTemplate Context="m">
+                                <MudStack Row="true" AlignItems="AlignItems.Center">
+                                    <MudText Typo="Typo.body2" Style="flex: 1">@m</MudText>
+                                    <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">@ManufacturerCount(m)</MudText>
+                                </MudStack>
+                            </ItemTemplate>
+                        </MudAutocomplete>
                     </MudItem>
                     <MudItem xs="12" sm="6">
-                        <MudTextField @bind-Value="Model.Model" Label="Model" MaxLength="100" />
+                        <MudAutocomplete T="string" @bind-Value="Model.Model" Label="Model" MaxLength="100"
+                                         SearchFunc="SearchModels" OpenOnFocus="true" CoerceText="false" CoerceValue="true"
+                                         ResetValueOnEmptyText="true" Clearable="true" MaxItems="null"
+                                         HelperText="@(string.IsNullOrWhiteSpace(Model.Manufacturer) ? null : $"{Model.Manufacturer} models listed first")" />
                     </MudItem>
                     <MudItem xs="12" sm="6">
                         <MudTextField @bind-Value="Model.SerialNumber" Label="Serial number" MaxLength="100" />
@@ -63,7 +90,7 @@
                         <MudNumericField T="int?" @bind-Value="Model.RackUnit" Label="Bottom U" Min="1" Max="60" Disabled="Model.RackId is null" />
                     </MudItem>
                     <MudItem xs="6" sm="3">
-                        <MudNumericField @bind-Value="Model.HeightU" Label="Height (U)" Min="1" Max="60" Disabled="Model.RackId is null" />
+                        <MudNumericField @bind-Value="Model.HeightU" Label="Height (U)" Min="1" Max="60" HelperText="Rack units it takes up" />
                     </MudItem>
                     <MudItem xs="12">
                         <MudSelect T="int?" @bind-Value="Model.FaceplateTemplateId" Label="Faceplate layout"
@@ -111,9 +138,52 @@
 
 @code {
     [Parameter] public Device Model { get; set; } = new();
+    /// <summary>Pre-select a device template (e.g. from the Device templates page).</summary>
+    [Parameter] public int? TemplateId { get; set; }
+
+    private List<DeviceTemplateInfo> _deviceTemplates = [];
+    private int? _templateId;
+    private DeviceTemplateInfo? SelectedTemplate => _deviceTemplates.FirstOrDefault(t => t.Id == _templateId);
+
+    /// <summary>Copies the template's details into the form; its ports are added when the device is saved.</summary>
+    private async Task UseTemplate(int? templateId)
+    {
+        _templateId = templateId;
+        if (templateId is not int id || await DeviceTemplates.GetAsync(id) is not { } t) return;
+        Model.Kind = t.Kind;
+        Model.Manufacturer = t.Manufacturer;
+        Model.Model = t.Model;
+        Model.HeightU = t.HeightU;
+        Model.FaceplateRows = t.FaceplateRows;
+        Model.FaceplateNumbering = t.FaceplateNumbering;
+        Model.FaceplateTemplateId = t.FaceplateTemplateId;
+    }
 
     private List<Room>? _rooms;
     private List<FaceplateTemplateInfo> _templates = [];
+    private List<(string Name, int Count)> _manufacturers = [];
+    private List<(string Model, string? Manufacturer)> _models = [];
+    private string? _modelsFor;
+
+    private string ManufacturerCount(string name) =>
+        _manufacturers.FirstOrDefault(m => m.Name == name) is { Count: > 0 } m ? $"{m.Count} device{(m.Count == 1 ? "" : "s")}" : "";
+
+    /// <summary>Manufacturers already in use that contain the typed text (all of them when empty).</summary>
+    private Task<IEnumerable<string>> SearchManufacturers(string? text, CancellationToken _) =>
+        Task.FromResult(_manufacturers.Select(m => m.Name)
+            .Where(n => string.IsNullOrWhiteSpace(text) || n.Contains(text.Trim(), StringComparison.OrdinalIgnoreCase)));
+
+    /// <summary>Models already in use, the chosen manufacturer's first.</summary>
+    private async Task<IEnumerable<string>> SearchModels(string? text, CancellationToken _)
+    {
+        if (_modelsFor != Model.Manufacturer)
+        {
+            _models = await Devices.ModelsAsync(Model.Manufacturer);
+            _modelsFor = Model.Manufacturer;
+        }
+        return _models.Select(m => m.Model)
+            .Where(n => string.IsNullOrWhiteSpace(text) || n.Contains(text.Trim(), StringComparison.OrdinalIgnoreCase));
+    }
 
     private List<Rack> RacksInRoom => _rooms?.FirstOrDefault(r => r.Id == Model.RoomId)?.Racks.OrderBy(r => r.Name).ToList() ?? [];
 
@@ -121,7 +191,13 @@
     {
         _rooms = await Locations.GetRoomsAsync();
         _templates = await Faceplates.GetTemplatesAsync();
+        _manufacturers = await Devices.ManufacturersAsync();
         if (Model.RoomId == 0 && _rooms.Count == 1) Model.RoomId = _rooms[0].Id;
+        if (Model.Id == 0)
+        {
+            _deviceTemplates = await DeviceTemplates.GetAllAsync();
+            if (TemplateId is int preset) await UseTemplate(preset);
+        }
     }
 
     private void RoomChanged(int roomId)
@@ -130,5 +206,7 @@
         Model.RoomId = roomId;
     }
 
-    private Task Save() => SubmitAsync(() => Devices.SaveAsync(Model));
+    private Task Save() => _templateId is int templateId
+        ? SubmitAsync(() => DeviceTemplates.CreateDeviceAsync(Model, templateId))
+        : SubmitAsync(() => Devices.SaveAsync(Model));
 }

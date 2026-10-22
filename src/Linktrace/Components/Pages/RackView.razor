@@ -2,6 +2,7 @@
 @attribute [Authorize]
 @inherits AppPageBase
 @inject LocationService Locations
+@inject DeviceService DeviceSvc
 
 <PageTitle>@(_rack?.Name ?? "Rack") · Linktrace</PageTitle>
 
@@ -31,47 +32,91 @@
     }
     @if (CanEdit)
     {
-        <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Filled" Color="Color.Primary" OnClick="AddDevice">Add device</MudButton>
+        <MudButton StartIcon="@Icons.Material.Filled.PlaylistAdd" Variant="Variant.Filled" Color="Color.Primary" OnClick="() => AddExisting(null)">Add existing devices</MudButton>
+        <MudButton StartIcon="@Icons.Material.Filled.Add" Variant="Variant.Outlined" Color="Color.Primary" OnClick="AddDevice">New device</MudButton>
         <MudIconButton Icon="@Icons.Material.Filled.Edit" OnClick="EditRack" title="Edit rack" />
         <MudIconButton Icon="@Icons.Material.Filled.Delete" OnClick="DeleteRack" title="Delete rack" />
     }
 </MudStack>
 
+@* The native handler gives Firefox the drag data it needs; Blazor handles the rest. *@
+<div ondragstart="event.dataTransfer && event.dataTransfer.setData('text/plain', 'device')">
 <MudGrid>
     <MudItem xs="12" md="7">
         <MudPaper Outlined="true" Class="pa-2 lt-rack">
             @foreach (var slot in Slots())
             {
-                <div class="lt-rack-slot" style="height: @(30 * slot.Height)px">
+                var unit = slot.Top;
+                <div class="@($"lt-rack-slot {(_dropUnit == unit && slot.Device is null ? "drop" : "")}")" style="height: @(30 * slot.Height)px"
+                     @ondragover:preventDefault="true" @ondragenter="() => _dropUnit = slot.Device is null ? unit : null"
+                     @ondrop="() => DropOnSlot(unit)">
                     <div class="lt-rack-unit">@(slot.Height > 1 ? $"{slot.Top}–{slot.Top - slot.Height + 1}" : slot.Top.ToString())</div>
                     @if (slot.Device is { } d)
                     {
-                        <div class="lt-rack-device" @onclick="@(() => Nav.NavigateTo($"devices/{d.Id}"))" title="@d.Model">
+                        <div class="lt-rack-device" draggable="@(CanEdit ? "true" : "false")" @ondragstart="() => _dragDeviceId = d.Id"
+                             @ondragend="EndDrag" @onclick="@(() => Nav.NavigateTo($"devices/{d.Id}"))"
+                             title="@($"{d.Model}{(CanEdit ? " · drag to move" : "")}")">
                             <MudIcon Icon="@Display.KindIcon(d.Kind)" Size="Size.Small" />
                             <b>@d.Name</b>
                             <span style="opacity: .8">@d.Ports.Count(p => p.CableId != null)/@d.Ports.Count ports used</span>
                         </div>
                     }
+                    else if (CanEdit)
+                    {
+                        <div class="lt-rack-empty" @onclick="() => AddExisting(unit)" title="@($"Put a device at U{unit}")">
+                            <MudIcon Icon="@Icons.Material.Filled.Add" Size="Size.Small" />
+                        </div>
+                    }
+                </div>
+            }
+        </MudPaper>
+        @if (CanEdit)
+        {
+            <MudText Typo="Typo.caption" Class="mt-1 d-block" Style="color: var(--mud-palette-text-secondary)">
+                Drag a device onto an empty slot to place or move it, or click an empty slot to pick one.
+            </MudText>
+        }
+    </MudItem>
+    <MudItem xs="12" md="5">
+        <MudPaper Outlined="true" Class="pa-4">
+            <MudText Typo="Typo.subtitle1" GutterBottom="true">Devices in this rack</MudText>
+            @if (_rack.Devices.Count == 0)
+            {
+                <MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)">
+                    None yet. Use “Add existing devices” to put devices from @_rack.Room.Site.Name in this rack.
+                </MudText>
+            }
+            @foreach (var d in _rack.Devices.OrderByDescending(x => x.RackUnit ?? int.MinValue).ThenBy(x => x.Name))
+            {
+                var device = d;
+                <div class="@($"lt-rack-list-row {(device.RackUnit is null ? "unplaced" : "")}")" draggable="@(CanEdit ? "true" : "false")"
+                     @ondragstart="() => _dragDeviceId = device.Id" @ondragend="EndDrag">
+                    @if (CanEdit)
+                    {
+                        <MudIcon Icon="@Icons.Material.Filled.DragIndicator" Size="Size.Small" Style="color: var(--mud-palette-text-disabled); cursor: grab" />
+                    }
+                    <MudIcon Icon="@Display.KindIcon(device.Kind)" Size="Size.Small" Color="Color.Primary" />
+                    <MudLink Href="@($"devices/{device.Id}")" Typo="Typo.body2" Style="flex: 1">@device.Name</MudLink>
+                    @if (CanEdit)
+                    {
+                        <MudButton Size="Size.Small" Variant="@(device.RackUnit is null ? Variant.Outlined : Variant.Text)"
+                                   Color="@(device.RackUnit is null ? Color.Warning : Color.Default)"
+                                   OnClick="() => SetPosition(device)" title="Set its position in the rack">
+                            @PositionText(device)
+                        </MudButton>
+                        <MudIconButton Icon="@Icons.Material.Filled.Logout" Size="Size.Small" OnClick="() => RemoveFromRack(device)"
+                                       title="Take out of this rack (stays in the room)" />
+                    }
+                    else
+                    {
+                        <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)">@PositionText(device)</MudText>
+                    }
                 </div>
             }
         </MudPaper>
     </MudItem>
-    <MudItem xs="12" md="5">
-        @{ var unplaced = _rack.Devices.Where(d => d.RackUnit is null).OrderBy(d => d.Name).ToList(); }
-        @if (unplaced.Count > 0)
-        {
-            <MudPaper Outlined="true" Class="pa-4">
-                <MudText Typo="Typo.subtitle1" GutterBottom="true">In this rack, no position set</MudText>
-                <MudList T="string" Dense="true">
-                    @foreach (var d in unplaced)
-                    {
-                        <MudListItem Icon="@Display.KindIcon(d.Kind)" Href="@($"devices/{d.Id}")">@d.Name</MudListItem>
-                    }
-                </MudList>
-            </MudPaper>
-        }
-    </MudItem>
 </MudGrid>
+</div>
 
 @code {
     [Parameter] public int Id { get; set; }
@@ -124,6 +169,59 @@
                 u--;
             }
         }
+    }
+
+    /// <summary>Put devices that already exist at this site into the rack, optionally starting at a clicked slot.</summary>
+    private async Task AddExisting(int? unit)
+    {
+        var added = await Dialogs.OpenAsync<AddToRackDialog, int>(unit is null ? "Add existing devices" : $"Put a device at U{unit}",
+            new() { { d => d.Rack, _rack! }, { d => d.StartUnit, unit } }, MaxWidth.Medium);
+        if (added > 0)
+        {
+            Snackbar.Add($"Added {added} device(s) to {_rack!.Name}", Severity.Success);
+            await Load();
+        }
+    }
+
+    // ---- Positioning: drag and drop, or the position button ----
+    private int? _dragDeviceId;
+    private int? _dropUnit;
+
+    private static string PositionText(Device d) =>
+        d.RackUnit is int u ? (d.HeightU > 1 ? $"U{u}–{u + d.HeightU - 1}" : $"U{u}") : "Set position";
+
+    private void EndDrag()
+    {
+        _dragDeviceId = null;
+        _dropUnit = null;
+    }
+
+    /// <summary>A device dropped on an empty slot: its top lands on that slot (it hangs down from there).</summary>
+    private async Task DropOnSlot(int unit)
+    {
+        var id = _dragDeviceId;
+        EndDrag();
+        if (id is null || !CanEdit || _rack!.Devices.FirstOrDefault(d => d.Id == id) is not { } device) return;
+        var bottom = Math.Max(1, unit - device.HeightU + 1);
+        if (device.RackUnit == bottom) return;
+        if (await Snackbar.RunAsync(() => DeviceSvc.PlaceInRackAsync(_rack.Id, [new RackPlacement(device.Id, bottom)]),
+                $"{device.Name} moved to {(device.HeightU > 1 ? $"U{bottom}–{bottom + device.HeightU - 1}" : $"U{bottom}")}"))
+            await Load();
+    }
+
+    private async Task SetPosition(Device d)
+    {
+        var saved = await Dialogs.OpenAsync<RackPositionDialog, int>($"Position of {d.Name}",
+            new() { { x => x.Device, d }, { x => x.Rack, _rack! } });
+        if (saved > 0) await Load();
+    }
+
+    private async Task RemoveFromRack(Device d)
+    {
+        if (!await Dialogs.ConfirmAsync("Take out of rack", $"Take '{d.Name}' out of {_rack!.Name}? It stays in {_rack.Room.Name}, with its ports and cables.", "Take out"))
+            return;
+        if (await Snackbar.RunAsync(() => DeviceSvc.RemoveFromRackAsync(d.Id, d.Version), $"{d.Name} taken out of the rack"))
+            await Load();
     }
 
     private async Task AddDevice()

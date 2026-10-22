@@ -1,0 +1,190 @@
+@page "/templates"
+@attribute [Authorize]
+@inherits AppPageBase
+@inject DeviceTemplateService TemplateSvc
+
+<PageTitle>Device templates · Linktrace</PageTitle>
+
+<MudStack Row="true" AlignItems="AlignItems.Center" Wrap="Wrap.Wrap" Class="mb-2">
+    <MudIcon Icon="@Icons.Material.Filled.Bookmarks" Size="Size.Large" Color="Color.Primary" />
+    <MudText Typo="Typo.h4">Device templates</MudText>
+    <MudSpacer />
+    @if (CanEdit)
+    {
+        <MudFileUpload T="IBrowserFile" FilesChanged="FileChosen" Accept=".json,application/json" MaxFileSize="MaxBytes">
+            <CustomContent>
+                <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.UploadFile" OnClick="@(() => context.OpenFilePickerAsync())">Import…</MudButton>
+            </CustomContent>
+        </MudFileUpload>
+    }
+    <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.Download" Disabled="_templates.Count == 0"
+               OnClick="@(() => Nav.NavigateTo("api/templates/export", forceLoad: true))">Export all</MudButton>
+</MudStack>
+<MudText Typo="Typo.body2" Style="color: var(--mud-palette-text-secondary)" Class="mb-4">
+    A template holds a kind of device: its type, manufacturer, model, height, ports and faceplate layout. Save one from any device
+    (<b>Save as template</b> on its page), start new devices from it in <b>Add device</b>, and export it as a file to share with other Linktrace installs.
+</MudText>
+
+@if (_preview is { } p)
+{
+    <MudPaper Outlined="true" Class="pa-4 mb-4">
+        <MudText Typo="Typo.h6" GutterBottom="true">Import @_fileName</MudText>
+        @if (!p.CanImport)
+        {
+            <MudAlert Severity="Severity.Error">
+                @(p.File.Templates.Count == 0 ? "That file has no templates in it." : "This file can't be imported:")
+                <ul class="ml-4">@foreach (var problem in p.Problems) { <li>@problem</li> }</ul>
+            </MudAlert>
+        }
+        else
+        {
+            <MudText Typo="Typo.body2" Class="mb-2">
+                @p.File.Templates.Count template(s)@(p.File.ExportedBy is null ? "" : $", shared by {p.File.ExportedBy}") on @p.File.ExportedUtc.ToLocalTime().ToString("yyyy-MM-dd"):
+            </MudText>
+            <MudSimpleTable Dense="true" Elevation="0" Class="mb-2">
+                <tbody>
+                    @foreach (var t in p.File.Templates)
+                    {
+                        <tr>
+                            <td><b>@t.Name</b>@(p.Renames.Contains(t.Name, StringComparer.OrdinalIgnoreCase) ? " → will be saved as “(imported)”" : "")</td>
+                            <td>@string.Join(" ", new[] { t.Manufacturer, t.Model }.Where(s => s != null))</td>
+                            <td>@t.Ports.Count port(s)</td>
+                            <td>@(t.Layout is null ? "automatic layout" : $"layout “{t.Layout.Name}”")</td>
+                        </tr>
+                    }
+                </tbody>
+            </MudSimpleTable>
+            <MudStack Row="true">
+                <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.Upload" OnClick="Import" Disabled="_busy">Import</MudButton>
+                <MudButton Variant="Variant.Text" OnClick="() => _preview = null">Cancel</MudButton>
+            </MudStack>
+        }
+    </MudPaper>
+}
+@if (_error is not null) { <MudAlert Severity="Severity.Error" Class="mb-4">@_error</MudAlert> }
+
+@if (_loading)
+{
+    <MudProgressLinear Indeterminate="true" />
+}
+else if (_templates.Count == 0)
+{
+    <MudAlert Severity="Severity.Info">
+        No templates yet. Open a device and click <b>Save as template</b>, or import a template file someone shared with you.
+    </MudAlert>
+}
+else
+{
+    <MudTable Items="_templates" Dense="true" Hover="true" Outlined="true" Breakpoint="Breakpoint.Sm">
+        <HeaderContent>
+            <MudTh>Template</MudTh>
+            <MudTh>Device</MudTh>
+            <MudTh>Ports</MudTh>
+            <MudTh>Faceplate</MudTh>
+            <MudTh></MudTh>
+        </HeaderContent>
+        <RowTemplate>
+            <MudTd DataLabel="Template">
+                <MudStack Row="true" AlignItems="AlignItems.Center" Spacing="2">
+                    <MudIcon Icon="@Display.KindIcon(context.Kind)" Size="Size.Small" Color="Color.Primary" />
+                    <div>
+                        <b>@context.Name</b>
+                        <MudText Typo="Typo.caption" Class="d-block" Style="color: var(--mud-palette-text-secondary)">
+                            Updated @context.UpdatedUtc.ToLocalTime().ToString("yyyy-MM-dd")@(context.UpdatedBy is null ? "" : $" by {context.UpdatedBy}")
+                        </MudText>
+                    </div>
+                </MudStack>
+            </MudTd>
+            <MudTd DataLabel="Device">
+                @Display.Kind(context.Kind) · @context.HeightU U
+                @if (context.Manufacturer is not null || context.Model is not null)
+                {
+                    <MudText Typo="Typo.caption" Class="d-block" Style="color: var(--mud-palette-text-secondary)">@string.Join(" ", new[] { context.Manufacturer, context.Model }.Where(s => s != null))</MudText>
+                }
+            </MudTd>
+            <MudTd DataLabel="Ports">
+                @context.PortCount
+                <MudText Typo="Typo.caption" Class="d-block" Style="color: var(--mud-palette-text-secondary)">@context.PortSummary</MudText>
+            </MudTd>
+            <MudTd DataLabel="Faceplate">@(context.LayoutName ?? "Automatic")</MudTd>
+            <MudTd Style="text-align: right; white-space: nowrap">
+                @if (CanEdit)
+                {
+                    <MudButton Size="Size.Small" Variant="Variant.Text" StartIcon="@Icons.Material.Filled.Add" OnClick="() => NewDevice(context)">New device</MudButton>
+                }
+                <MudIconButton Icon="@Icons.Material.Filled.Download" Size="Size.Small" title="Export this template"
+                               OnClick="@(() => Nav.NavigateTo($"api/templates/export?ids={context.Id}", forceLoad: true))" />
+                @if (CanEdit)
+                {
+                    <MudIconButton Icon="@Icons.Material.Filled.Delete" Size="Size.Small" OnClick="() => Delete(context)" title="Delete template" />
+                }
+            </MudTd>
+        </RowTemplate>
+    </MudTable>
+}
+
+@code {
+    private const long MaxBytes = 10L * 1024 * 1024;
+
+    private List<DeviceTemplateInfo> _templates = [];
+    private bool _loading = true, _busy;
+    private TemplateImportPreview? _preview;
+    private string? _fileName, _error;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await base.OnInitializedAsync();
+        await Load();
+    }
+
+    private async Task Load()
+    {
+        _loading = true;
+        _templates = await TemplateSvc.GetAllAsync();
+        _loading = false;
+    }
+
+    private async Task NewDevice(DeviceTemplateInfo t)
+    {
+        var created = await Dialogs.OpenAsync<DeviceDialog, Device>($"New device from {t.Name}",
+            new() { { d => d.Model, new Device() }, { d => d.TemplateId, t.Id } }, MaxWidth.Medium);
+        if (created is not null) Nav.NavigateTo($"devices/{created.Id}");
+    }
+
+    private async Task Delete(DeviceTemplateInfo t)
+    {
+        if (!await Dialogs.ConfirmAsync("Delete template", $"Delete the template '{t.Name}'? Devices already made from it aren't affected.")) return;
+        if (await Snackbar.RunAsync(() => TemplateSvc.DeleteAsync(t.Id), "Template deleted")) await Load();
+    }
+
+    private async Task FileChosen(IBrowserFile? file)
+    {
+        _preview = null;
+        _error = null;
+        if (file is null) return;
+        _fileName = file.Name;
+        try
+        {
+            using var buffer = new MemoryStream();
+            await using (var upload = file.OpenReadStream(MaxBytes)) await upload.CopyToAsync(buffer);
+            buffer.Position = 0;
+            _preview = await TemplateSvc.PreviewAsync(buffer);
+        }
+        catch (LinktraceException ex) { _error = ex.Message; }
+        catch (IOException ex) { _error = $"Couldn't read the file: {ex.Message}"; }
+    }
+
+    private async Task Import()
+    {
+        if (_preview is null) return;
+        _busy = true;
+        List<string>? added = null;
+        if (await Snackbar.RunAsync(async () => added = await TemplateSvc.ImportAsync(_preview.File)))
+        {
+            Snackbar.Add($"Imported {added!.Count} template(s): {string.Join(", ", added)}", Severity.Success);
+            _preview = null;
+            await Load();
+        }
+        _busy = false;
+    }
+}

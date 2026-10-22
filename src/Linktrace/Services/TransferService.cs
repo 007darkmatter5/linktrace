@@ -28,6 +28,8 @@ public record ExportFile
     public List<PortDto> Ports { get; init; } = [];
     public List<CableDto> Cables { get; init; } = [];
     public List<PortMapDto> PortMaps { get; init; } = [];
+    /// <summary>Added later; older files simply have none.</summary>
+    public List<DeviceTemplateDto> DeviceTemplates { get; init; } = [];
 }
 
 public record SiteDto(int Id, string Name, string? Address, string? Notes);
@@ -42,7 +44,12 @@ public record PortDto(int Id, int DeviceId, string Name, int Position, PortFace 
     string? Description, int? PairedPortId);
 public record CableDto(int Id, string? Label, CableType CableType, string? Color, decimal? LengthMeters, string? Notes,
     int PortAId, int PortBId);
-public record PortMapDto(int Id, string Name, string? Notes, List<int> DeviceIds, bool FollowPassThrough, bool ShowExternal);
+/// <summary>A device template in a whole-install export; its layout is referenced by id in <see cref="ExportFile.FaceplateTemplates"/>.</summary>
+public record DeviceTemplateDto(string Name, DeviceKind Kind, string? Manufacturer, string? Model, int HeightU, int FaceplateRows,
+    PortNumbering FaceplateNumbering, string? Notes, int? FaceplateTemplateId, List<TemplatePortDto> Ports);
+
+public record PortMapDto(int Id, string Name, string? Notes, List<int> DeviceIds, bool FollowPassThrough, bool ShowExternal,
+    List<int>? Columns = null, List<int>? Spans = null); // added later; missing in older files means one device per row, automatic spans
 
 public enum ImportMode
 {
@@ -102,7 +109,12 @@ public class TransferService(IDbContextFactory<ApplicationDbContext> factory, IC
                     return new CableDto(c.Id, c.Label, c.CableType, c.Color, c.LengthMeters, c.Notes, ends[0].Id, ends[1].Id);
                 }).ToList(),
             PortMaps = await ctx.PortMapViews.AsNoTracking().OrderBy(x => x.Id)
-                .Select(x => new PortMapDto(x.Id, x.Name, x.Notes, x.DeviceIds, x.FollowPassThrough, x.ShowExternal)).ToListAsync()
+                .Select(x => new PortMapDto(x.Id, x.Name, x.Notes, x.DeviceIds, x.FollowPassThrough, x.ShowExternal, x.Columns, x.Spans)).ToListAsync(),
+            DeviceTemplates = (await ctx.DeviceTemplates.AsNoTracking().OrderBy(x => x.Name).ToListAsync())
+                .Select(t => new DeviceTemplateDto(t.Name, t.Kind, t.Manufacturer, t.Model, t.HeightU, t.FaceplateRows, t.FaceplateNumbering,
+                    t.Notes, t.FaceplateTemplateId,
+                    t.Ports.OrderBy(p => p.Position).Select(p => new TemplatePortDto(p.Name, p.Face, p.MediaType, p.Position, p.Description, p.PairName, p.PairFace)).ToList()))
+                .ToList()
         };
     }
 
@@ -143,6 +155,7 @@ public class TransferService(IDbContextFactory<ApplicationDbContext> factory, IC
         Clash("Site", file.Sites.Select(s => s.Name), await ctx.Sites.Select(s => s.Name).ToListAsync());
         Clash("Faceplate layout", file.FaceplateTemplates.Select(t => t.Name), await ctx.FaceplateTemplates.Select(t => t.Name).ToListAsync());
         Clash("Port map", file.PortMaps.Select(m => m.Name), await ctx.PortMapViews.Select(m => m.Name).ToListAsync());
+        Clash("Device template", file.DeviceTemplates.Select(t => t.Name), await ctx.DeviceTemplates.Select(t => t.Name).ToListAsync());
         Clash("Cable label", file.Cables.Where(c => c.Label != null).Select(c => c.Label!),
             await ctx.Cables.Where(c => c.Label != null).Select(c => c.Label!).ToListAsync());
 
@@ -166,6 +179,7 @@ public class TransferService(IDbContextFactory<ApplicationDbContext> factory, IC
             await ctx.Cables.ExecuteDeleteAsync();
             await ctx.Ports.ExecuteDeleteAsync();
             await ctx.Devices.ExecuteDeleteAsync();
+            await ctx.DeviceTemplates.ExecuteDeleteAsync();
             await ctx.FaceplateTemplates.ExecuteDeleteAsync();
             await ctx.Racks.ExecuteDeleteAsync();
             await ctx.Rooms.ExecuteDeleteAsync();
@@ -177,6 +191,7 @@ public class TransferService(IDbContextFactory<ApplicationDbContext> factory, IC
         var siteNames = (await ctx.Sites.Select(s => s.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var templateNames = (await ctx.FaceplateTemplates.Select(t => t.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var mapNames = (await ctx.PortMapViews.Select(m => m.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var deviceTemplateNames = (await ctx.DeviceTemplates.Select(t => t.Name).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
         var labels = (await ctx.Cables.Where(c => c.Label != null).Select(c => c.Label!).ToListAsync()).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         string Unique(string what, string name, HashSet<string> taken)
@@ -250,11 +265,36 @@ public class TransferService(IDbContextFactory<ApplicationDbContext> factory, IC
 
         // 4. Saved port maps, pointing at the new device ids.
         foreach (var m in file.PortMaps)
+        {
+            // Keep each device's column alongside it while dropping devices that aren't in the file.
+            var slots = m.DeviceIds
+                .Select((id, i) => (Id: id,
+                    Column: m.Columns is { } cols && i < cols.Count ? cols[i] : 0,
+                    Span: m.Spans is { } spans && i < spans.Count ? spans[i] : 0))
+                .Where(s => devices.ContainsKey(s.Id)).ToList();
             ctx.PortMapViews.Add(new PortMapView
             {
                 Name = Unique("Port map", m.Name.Trim(), mapNames), Notes = m.Notes,
-                DeviceIds = m.DeviceIds.Where(devices.ContainsKey).Select(id => devices[id].Id).ToList(),
+                DeviceIds = slots.Select(s => devices[s.Id].Id).ToList(),
+                Columns = PortMapLayout.Normalize(slots.Select(s => s.Column).ToList(), slots.Count),
+                Spans = PortMapLayout.NormalizeSpans(slots.Select(s => s.Span).ToList(), slots.Count),
                 FollowPassThrough = m.FollowPassThrough, ShowExternal = m.ShowExternal
+            });
+        }
+
+        // 5. Device templates, pointing at their imported layouts.
+        foreach (var dt in file.DeviceTemplates)
+            ctx.DeviceTemplates.Add(new DeviceTemplate
+            {
+                Name = Unique("Device template", dt.Name.Trim(), deviceTemplateNames), Kind = dt.Kind, Manufacturer = dt.Manufacturer,
+                Model = dt.Model, HeightU = Math.Clamp(dt.HeightU, 1, 60), FaceplateRows = Math.Clamp(dt.FaceplateRows, 0, 8),
+                FaceplateNumbering = dt.FaceplateNumbering, Notes = dt.Notes,
+                FaceplateTemplate = dt.FaceplateTemplateId is int lid ? templates[lid] : null,
+                Ports = dt.Ports.Select(p => new TemplatePort
+                {
+                    Name = p.Name, Face = p.Face, MediaType = p.MediaType, Position = p.Position,
+                    Description = p.Description, PairName = p.PairName, PairFace = p.PairFace
+                }).ToList()
             });
 
         var counts = Counts(file);
@@ -272,7 +312,7 @@ public class TransferService(IDbContextFactory<ApplicationDbContext> factory, IC
     {
         ["Sites"] = f.Sites.Count, ["Rooms"] = f.Rooms.Count, ["Racks"] = f.Racks.Count, ["Devices"] = f.Devices.Count,
         ["Ports"] = f.Ports.Count, ["Cables"] = f.Cables.Count, ["Faceplate layouts"] = f.FaceplateTemplates.Count,
-        ["Port maps"] = f.PortMaps.Count
+        ["Port maps"] = f.PortMaps.Count, ["Device templates"] = f.DeviceTemplates.Count
     };
 
     /// <summary>Checks every reference in the file points at something in the file, and the basic rules hold.</summary>
@@ -326,6 +366,13 @@ public class TransferService(IDbContextFactory<ApplicationDbContext> factory, IC
             }
         }
         foreach (var m in f.PortMaps) Check(!string.IsNullOrWhiteSpace(m.Name), $"Port map {m.Id} has no name.");
+        foreach (var dt in f.DeviceTemplates)
+        {
+            Check(dt.FaceplateTemplateId is null || templates.Contains(dt.FaceplateTemplateId.Value), $"Device template '{dt.Name}' points at a missing faceplate layout.");
+            foreach (var p in DeviceTemplateService.Validate(new TemplateDto(dt.Name, dt.Kind, dt.Manufacturer, dt.Model, dt.HeightU,
+                         dt.FaceplateRows, dt.FaceplateNumbering, dt.Notes, dt.Ports, null)))
+                Check(false, p);
+        }
         return problems;
     }
 }

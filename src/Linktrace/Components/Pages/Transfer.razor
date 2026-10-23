@@ -11,8 +11,8 @@
 </MudStack>
 
 <MudGrid>
-    <MudItem xs="12" md="5">
-        <MudPaper Outlined="true" Class="pa-4">
+    <MudItem xs="12" md="6">
+        <MudPaper Outlined="true" Class="pa-4" Style="height: 100%">
             <MudText Typo="Typo.h6" GutterBottom="true">Export</MudText>
             <MudText Typo="Typo.body2" Class="mb-3">
                 Downloads everything as one JSON file: sites, rooms, racks, devices, ports, cables, faceplate layouts and saved port maps.
@@ -26,8 +26,8 @@
         </MudPaper>
     </MudItem>
 
-    <MudItem xs="12" md="7">
-        <MudPaper Outlined="true" Class="pa-4">
+    <MudItem xs="12" md="6">
+        <MudPaper Outlined="true" Class="pa-4" Style="height: 100%">
             <MudText Typo="Typo.h6" GutterBottom="true">Import</MudText>
             @if (!_isAdmin)
             {
@@ -38,10 +38,14 @@
                 <MudText Typo="Typo.body2" Class="mb-3">
                     Load a file exported from Linktrace. You'll see what's in it before anything changes.
                 </MudText>
+                <MudText Typo="Typo.caption" Style="color: var(--mud-palette-text-secondary)" Class="d-block mb-3">
+                    You can add to the data that's here or replace it. Files up to 200 MB.
+                </MudText>
 
-                <MudFileUpload T="IBrowserFile" FilesChanged="FileChosen" Accept=".json,application/json" MaxFileSize="MaxBytes">
+                <MudFileUpload T="IBrowserFile" FilesChanged="FileChosen" Accept=".json,application/json" MaxFileSize="MaxBytes"
+                               Style="width: fit-content">
                     <CustomContent>
-                        <MudButton Variant="Variant.Outlined" StartIcon="@Icons.Material.Filled.UploadFile" OnClick="@(() => context.OpenFilePickerAsync())"
+                        <MudButton Variant="Variant.Filled" Color="Color.Primary" StartIcon="@Icons.Material.Filled.UploadFile" OnClick="@(() => context.OpenFilePickerAsync())"
                                    Disabled="_busy">Choose export file…</MudButton>
                     </CustomContent>
                 </MudFileUpload>
